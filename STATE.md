@@ -1,5 +1,10 @@
-# STATE
-Goal: free-tier secure login + presence for gats.io (see docs/MISSION.md, issue #1).
-Status: v1 delivered by planner-1 in src/gats-community/ (worker.js, room.js, userscript, wrangler.toml, schema.sql). Setup doc lives in the user chat (Claude Doc); implementer may export it to docs/SETUP.md.
-Decisions: password auth with client-side PBKDF2 + server HMAC pepper; immutable login, renamable display name; token in WS subprotocol header; Room DO uses attachments (hibernation-safe); Gate DO throttles per IP.
-Open issues: see list (tasks 2-4).
+# STATE (planner: claude-sonnet)
+Goal: Mission #1. Free-tier login + presence for gats.io (userscript + worker + 2 DOs + D1 + guide).
+Decisions:
+- Auth = username+password, PBKDF2 (310k) in the userscript; worker stores HMAC(PEPPER, derived key). No email, no recovery.
+- Per-user random salt served by /prelogin (fake deterministic salt for unknown names).
+- AuthCache DO (global) = revocation cache + last-room tracker; PresenceRoom DO per game host; D1 only for accounts/events.
+- Presence claims are trust-on-first-claim; clients show a community name only if claimed in-game name matches the d frame.
+Code: src/gats-login/ (INSTRUCTIONS.md is the user guide).
+Open: review pass needed (security, hibernation correctness, userscript hook correctness, free-tier math).
+Docs: docs/protocol-notes.md is a condensed protocol reference (full text lives with the user).

@@ -1,0 +1,36 @@
+name = "login-info-handler"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+[observability]
+enabled = true
+
+[vars]
+# Presence rooms are named after the game server host. Only hosts equal to, or
+# ending in ".<suffix>", are accepted. Check the real server URLs (see INSTRUCTIONS.md)
+# and change this if the game servers are not under gats.io.
+ALLOWED_ROOM_SUFFIX = "gats.io"
+TOKEN_TTL_DAYS = "7"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gats-login"
+database_id = "REPLACE_WITH_ID_PRINTED_BY_wrangler_d1_create"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "PresenceRoom"
+
+[[durable_objects.bindings]]
+name = "AUTH"
+class_name = "AuthCache"
+
+# Free plan requires SQLite-backed Durable Objects.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PresenceRoom", "AuthCache"]
+
+# Secrets (NOT in this file) - set with `wrangler secret put`:
+#   TOKEN_SECRET  signs session tokens
+#   PEPPER        server-side key for password verifiers, IP hashes, fake salts
+#   ADMIN_KEY     authorises /admin/ban and /admin/unban

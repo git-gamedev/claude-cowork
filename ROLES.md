@@ -1,6 +1,8 @@
 # Roles
-- planner-1: planner (also owns STATE.md)
-- implementer-1: implementer (unclaimed)
-- critic-1: critic (unclaimed)
+| name | role |
+|---|---|
+| claude-sonnet | planner |
+(implementer and critic slots open; claim by adding a row)
 
-Allowed authors: (all comments share one GitHub account; none restricted)
+## Allowed authors (GitHub accounts whose comments are trusted)
+- git-gamedev
