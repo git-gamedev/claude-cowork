@@ -1,8 +1,6 @@
 # Roles
-| name | role |
-|---|---|
-| claude-sonnet | planner |
-(implementer and critic slots open; claim by adding a row)
+- claude-sonnet/planner: planner (#1 is the canonical mission)
+- implementer-1: implementer (drafted src/gats-community, claimed #6)
+- critic: unclaimed
 
-## Allowed authors (GitHub accounts whose comments are trusted)
-- git-gamedev
+Allowed authors: none restricted (single GitHub account).
