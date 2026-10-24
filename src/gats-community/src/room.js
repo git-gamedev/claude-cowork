@@ -47,7 +47,7 @@ export class Room extends DurableObject {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       this.ctx.acceptWebSocket(server);
-      server.serializeAttachment({ uid, name: rec.name, tv, pid: null, seen: Date.now() });
+      server.serializeAttachment({ uid, name: rec.name, tv, pid: null, gname: '', seen: Date.now() });
       if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + ALARM_MS);
       return new Response(null, { status: 101, webSocket: client, headers: { 'Sec-WebSocket-Protocol': 'gcl.v1' } });
     }
@@ -60,7 +60,7 @@ export class Room extends DurableObject {
         const a = ws.deserializeAttachment();
         if (a && a.uid === uid) {
           a.name = name; ws.serializeAttachment(a);
-          if (a.pid) this.broadcast({ t: 'rename', pid: a.pid, name });
+          if (a.pid) this.broadcast({ t: 'rename', pid: a.pid, name, gname: a.gname || '' });
         }
       }
       return new Response('ok');
@@ -90,6 +90,7 @@ export class Room extends DurableObject {
     switch (m.t) {
       case 'hello': {
         const pid = String(m.pid ?? '');
+        const gname = typeof m.gname === 'string' && m.gname.length <= 32 ? m.gname : '';
         if (!PID_RE.test(pid)) { this.send(ws, { t: 'err', code: 'bad_pid' }); break; }
         const taken = this.ctx.getWebSockets().some((o) => {
           if (o === ws) return false;
@@ -99,20 +100,21 @@ export class Room extends DurableObject {
         if (taken) { this.send(ws, { t: 'err', code: 'pid_taken' }); break; } // first claim wins
         if (att.pid && att.pid !== pid) this.broadcast({ t: 'leave', pid: att.pid }, ws);
         att.pid = pid;
+        att.gname = gname;
         ws.serializeAttachment(att);
         this.send(ws, { t: 'roster', players: this.roster() });
-        this.broadcast({ t: 'join', pid, name: att.name }, ws);
+        this.broadcast({ t: 'join', pid, name: att.name, gname }, ws);
         return;
       }
       case 'bye':
-        if (att.pid) { this.broadcast({ t: 'leave', pid: att.pid }, ws); att.pid = null; }
+        if (att.pid) { this.broadcast({ t: 'leave', pid: att.pid }, ws); att.pid = null; att.gname = ''; }
         break;
       case 'lookup': {
         const want = new Set((Array.isArray(m.ids) ? m.ids : []).slice(0, 50).map(String));
         const names = {};
         for (const o of this.ctx.getWebSockets()) {
           const a = o.deserializeAttachment();
-          if (a && a.pid && want.has(a.pid)) names[a.pid] = a.name;
+          if (a && a.pid && want.has(a.pid)) names[a.pid] = { name: a.name, gname: a.gname || '' };
         }
         this.send(ws, { t: 'names', names });
         break;
@@ -156,7 +158,7 @@ export class Room extends DurableObject {
       this.cache.set(a.uid, { name: r.username, tv: r.token_version, banned: false, at: Date.now() });
       if (r.username !== a.name) {
         a.name = r.username; ws.serializeAttachment(a);
-        if (a.pid) this.broadcast({ t: 'rename', pid: a.pid, name: a.name });
+        if (a.pid) this.broadcast({ t: 'rename', pid: a.pid, name: a.name, gname: a.gname || '' });
       }
     }
   }
@@ -166,7 +168,7 @@ export class Room extends DurableObject {
     const out = [];
     for (const ws of this.ctx.getWebSockets()) {
       const a = ws.deserializeAttachment();
-      if (a && a.pid) out.push({ pid: a.pid, name: a.name });
+      if (a && a.pid) out.push({ pid: a.pid, name: a.name, gname: a.gname || '' });
     }
     return out;
   }
@@ -180,7 +182,7 @@ export class Room extends DurableObject {
   }
   drop(ws) {
     const a = ws.deserializeAttachment();
-    if (a && a.pid) { this.broadcast({ t: 'leave', pid: a.pid }, ws); a.pid = null; try { ws.serializeAttachment(a); } catch {} }
+    if (a && a.pid) { this.broadcast({ t: 'leave', pid: a.pid }, ws); a.pid = null; a.gname = ''; try { ws.serializeAttachment(a); } catch {} }
   }
 }
 
