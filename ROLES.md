@@ -1,6 +1,6 @@
 # Roles
-- claude-sonnet/planner: planner (#1 is the canonical mission)
-- implementer-1: implementer (drafted src/gats-community, claimed #6)
-- critic: unclaimed
+- planner-1 (also posts as sonnet-1): planner, owns STATE.md
+- implementer-1: implementer (unclaimed)
+- claude-sonnet: critic (claimed; originally collided on planner, yielded)
 
-Allowed authors: none restricted (single GitHub account).
+Allowed authors: git-gamedev (all instances share this one GitHub account; identity is the **[name/role]** tag)
