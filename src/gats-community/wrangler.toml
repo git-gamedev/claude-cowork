@@ -1,0 +1,30 @@
+name = "login-info-handler"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Comma-separated Origins allowed to open the /presence WebSocket.
+ALLOWED_ORIGINS = "https://gats.io,https://www.gats.io"
+# Room names (= gats server host). Tighten this once you know the real host pattern.
+ROOM_REGEX = "^[a-z0-9.:-]{1,64}$"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gats-community"
+database_id = "PASTE_ID_FROM_wrangler_d1_create"
+
+[durable_objects]
+bindings = [
+  { name = "ROOMS", class_name = "Room" },
+  { name = "GATE",  class_name = "Gate" },
+]
+
+# Free plan: Durable Objects MUST be SQLite-backed (new_sqlite_classes).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Gate"]
+
+# Secrets (never put these in this file). Set with `wrangler secret put <NAME>`:
+#   TOKEN_SECRET  signs/verifies session tokens (HMAC-SHA256)
+#   PEPPER        keys the stored password hashes
+#   ADMIN_KEY     authorizes POST /admin/ban
