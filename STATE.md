@@ -1,32 +1,36 @@
 # STATE
 
-## Checkpoint — 2026-10-24
-A relay pause occurred while collaborators were unavailable due to token/context limits. The work has now been compressed into **docs/RELAY-HANDOFF.md** (checkpoint commit: 7fde9558a7d3373d3e53fead5231de443ef43bfe). Read that handoff before re-reading the full Mission #1 thread. This is a handoff/compression step, not a claim that implementation is complete. User expects the original four agents and a fifth independent-work collaborator back at 10:30 PM local time tonight.
+## Checkpoint and pause
+A relay pause occurred while collaborators were unavailable due to token/context limits. The original four agents and a fifth collaborator with independent work are expected back at 10:30 PM local on 2026-10-24. Context is compressed in [docs/RELAY-HANDOFF.md](docs/RELAY-HANDOFF.md). The handoff is a checkpoint, not a claim that the implementation is complete.
 
 ## Goal
-Free-tier secure login + presence for gats.io (docs/MISSION.md, issue #1). Deliver a Tampermonkey userscript, Cloudflare Worker, Durable Object, D1 schema convention, and setup instructions.
+Free-tier secure login + presence for gats.io (docs/MISSION.md, issue #1). Deliver a Tampermonkey userscript, Cloudflare Worker, Durable Object, D1 schema convention, and detailed setup instructions.
 
 ## Canonical architecture decision
-Canonical base: `src/gats-community` (latest base decision commit at checkpoint: `81cd9c5`). `src/gats-login` and `src/gcl-worker` are donor/reference trees only. Prefer client-side PBKDF2 to keep the password off the server and avoid relying on an unverified DO CPU-limit exemption. Build `MessageEvent`/`Uint8Array` in the page realm via `unsafeWindow`. Preserve token-in-WebSocket-subprotocol, HMAC verification, attachment-based WebSocket hibernation state, and rename revocation checks inside SQL UPDATE.
+Canonical base: `src/gats-community`. `src/gats-login` and `src/gcl-worker` are donor/reference trees only. Prefer client-side PBKDF2 to keep the password off-server and avoid relying on an unverified DO CPU-limit exemption. Build page-facing `MessageEvent`/`Uint8Array` in the game/page realm via `unsafeWindow`. Preserve token-in-WebSocket-subprotocol, HMAC verification, attachment-based WebSocket hibernation state, rename revocation checks inside SQL UPDATE, and runtime ping/pong auto-response.
 
-## Open issues / implementation status
-- #4 / #5: critic review notes recorded in docs/review-claude-sonnet.md; re-review after fixes.
-- #6: local tests were paused pending base choice; base now chosen, so resume tests against `src/gats-community`.
-- #7: avoid D1 write for every failed password attempt; use bounded failure counters and persist a lock record only when threshold trips.
-- #8: alarm revalidation is currently broken by constructor-reset timestamp after hibernation. Revalidate each alarm or persist timestamp; estimate alarm/D1 cost carefully.
-- #9: current per-IP in-memory Gate is evictable, shared-IP-unfriendly, IPv6-bypassable, and lacks per-account throttling. Normalize IPv6 /64, count failures not successes, bound state, and document best-effort limits.
-- #10: add 24h rename cooldown, reserved names, room allowlist, and consider configurable registration cap/Turnstile.
-- #11: presence pid claims cannot be cryptographically authenticated without game-server cooperation; port gname matching mitigation and document residual cosmetic/spoofing risk.
-- #12: b/c frames must not create ghosts; only d frames create player records. Review a-frame field 23 and stale pid/name cache handling.
-- #3 remains an open duplicate according to the last handoff. #1 is the mission and remains open.
+## Recent implementation commits (re-review needed)
+- `28b5e88`: Room now revalidates active sockets on every alarm, removing the in-memory timestamp that reset after hibernation. This addresses #8's logic flaw, but per-room alarm/D1 read cost must still be assessed.
+- `2452750`: Userscript ignores b/c status/movement frames for unknown IDs; only d-frames create ghost records. This addresses the phantom-player bug in #12.
+- `95c5711` + `8d54fab`: Presence hello/roster/join/lookup/rename carry the game's in-game name (`gname`). Client applies a community name only when `gname` exactly matches the real d-frame username; own a-frame field 23 is updated too. This mitigates #11 but is not cryptographic identity proof.
+These files were syntax-parsed in the connector before commit. No live-game or Cloudflare integration tests have been run; keep the issues open until review and appropriate tests.
+
+## Open issues / remaining work
+- #4 / #5: Critic's review is in docs/review-claude-sonnet.md; re-review the recent changes and future fixes.
+- #6: Tests were paused pending base choice. Base is now chosen; add local tests against `src/gats-community` (tokens, KDF/HMAC, login/register, Room hello/lookup/rename/kick/revalidation and ghost/presence-name behavior).
+- #7: Failed passwords must not write D1 per attempt. Current base still needs durable, low-cost throttling/lockout that resists per-instance eviction and avoids easy victim lockout.
+- #9: Current Gate remains per-IP/in-memory; evictable, shared-IP-unfriendly, IPv6-rotatable, success-counting, and no per-account defense. Design a bounded/global approach, count failures rather than successful logins, normalize IPv6 /64, and document limitations.
+- #10: Add 24h rename cooldown (`renamed_at` migration required), reserved-name checks, room suffix allowlist, and consider a configurable registration cap/Turnstile.
+- #11: Keep the gname matching mitigation and explicitly document residual risk: players can still claim an in-game name; without game-server cooperation this is not authenticated identity.
+- #12: Core b/c ghost creation has been fixed, with a-frame field 23 updated; re-review/test before closing.
+- #3 remains an open duplicate according to the last handoff. #1 is the Mission and remains open.
 
 ## Next
-1. Confirm whether new commits arrived after checkpoint.
-2. Implement fixes and donor ports in `src/gats-community`, small commits, claim each issue before working.
-3. Critic re-reviews; implement local tests; researcher re-checks free-tier costs as needed.
-4. Refresh this file and setup instructions after progress; post DONE and close #1 only after deliverables are genuinely complete.
+1. Confirm whether new commits arrived after this checkpoint.
+2. Critic re-reviews commits above; implement remaining #7/#9/#10 ports in `src/gats-community`, small commits, with tasks claimed before work.
+3. Add local tests and review free-tier cost of alarm revalidation (about 1,440 DO alarms/active room/day at a 60-second interval, plus batched D1 reads).
+4. Merge useful donor features without replacing the canonical tree; refresh detailed instructions and schema migration docs.
+5. Post DONE and close Mission #1 only when deliverables are genuinely complete.
 
-## Incoming collaborator
-The user says a fifth collaborator has independent work/research and was also given the older GitGamedev project that was restarted after a DDoS exposed a flawed structure. Ask them to share their research and link/provide the legacy project/artifacts so the team can compare lessons. Its repo/path is not identified in this relay repository yet.
-
-
+## Incoming independent collaborator and legacy project
+The fifth collaborator has separate research/work. Ask them to share findings, artifacts, and links before duplicate work. They also received the older GitGamedev project that the user restarted after a DDoS exposed a flawed structure. Its repository/path is not identified in this relay repo yet; ask them to link or provide that project and relevant architecture notes so the team can compare lessons.
