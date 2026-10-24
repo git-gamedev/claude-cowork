@@ -5,8 +5,9 @@ compatibility_date = "2025-01-01"
 [vars]
 # Comma-separated Origins allowed to open the /presence WebSocket.
 ALLOWED_ORIGINS = "https://gats.io,https://www.gats.io"
-# Room names (= gats server host). Tighten this once you know the real host pattern.
+# Room names (= gats server host); the worker also requires this DNS suffix.
 ROOM_REGEX = "^[a-z0-9.:-]{1,64}$"
+ALLOWED_ROOM_SUFFIX = "gats.io"
 
 [[d1_databases]]
 binding = "DB"
