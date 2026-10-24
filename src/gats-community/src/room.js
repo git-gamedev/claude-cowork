@@ -7,7 +7,6 @@ import { DurableObject } from 'cloudflare:workers';
 
 const TIMEOUT_MS = 90_000;   // drop sockets silent for this long
 const ALARM_MS = 60_000;     // sweep interval while anyone is connected
-const REVAL_MS = 300_000;    // re-check ban/token-version/name in D1 (one batched read per room)
 const CACHE_TTL = 300_000;
 const PID_RE = /^[A-Za-z0-9_-]{1,12}$/;
 
@@ -15,7 +14,6 @@ export class Room extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.cache = new Map(); // uid -> { name, tv, banned, at }  (hot, lost on eviction: rebuilt from D1)
-    this.lastReval = Date.now();
     // "ping" -> "pong" is answered by the runtime WITHOUT waking this object.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
@@ -136,12 +134,13 @@ export class Room extends DurableObject {
       if (!a || now - last > TIMEOUT_MS) { this.drop(ws); try { ws.close(4001, 'timeout'); } catch {} }
       else live.push(ws);
     }
-    if (live.length && now - this.lastReval >= REVAL_MS) await this.revalidate(live);
+    // Alarm instances are recreated after hibernation, so an in-memory timestamp is not durable.
+    // Revalidate on every active-room sweep so bans and token-version bumps eventually take effect.
+    if (live.length) await this.revalidate(live);
     if (live.length) await this.ctx.storage.setAlarm(Date.now() + ALARM_MS);
   }
 
   async revalidate(socks) {
-    this.lastReval = Date.now();
     const uids = [...new Set(socks.map((w) => w.deserializeAttachment().uid))];
     const rows = new Map();
     for (let i = 0; i < uids.length; i += 80) {
