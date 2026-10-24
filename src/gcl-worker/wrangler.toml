@@ -1,0 +1,36 @@
+name = "login-info-handler"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# --- D1 -------------------------------------------------------------------
+# Run `npx wrangler d1 create gcl-db` and paste the database_id it prints.
+[[d1_databases]]
+binding = "DB"
+database_name = "gcl-db"
+database_id = "PASTE_YOUR_DATABASE_ID_HERE"
+
+# --- Durable Objects ------------------------------------------------------
+[[durable_objects.bindings]]
+name = "ROOM"          # one instance per gats server
+class_name = "Room"
+
+[[durable_objects.bindings]]
+name = "AUTHGATE"      # password hashing + brute-force counters
+class_name = "AuthGate"
+
+# The free plan only allows SQLite-backed Durable Objects.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "AuthGate"]
+
+# --- Plain settings (not secret) -------------------------------------------
+[vars]
+ALLOWED_ORIGINS = "https://gats.io"     # WebSocket Origin check; subdomains of gats.io also pass
+HASH_MODE = "do"                         # "do" = hash inside AuthGate DO, "worker" = hash in the Worker
+PBKDF2_ITERATIONS = "100000"             # 100000 is the maximum Workers allow
+TOKEN_TTL_DAYS = "7"
+RENAME_COOLDOWN_HOURS = "24"
+
+# Secrets (set with `npx wrangler secret put NAME`, never put them here):
+#   TOKEN_SECRET  - HMAC key for signing tokens
+#   ADMIN_KEY     - bearer key for /admin/ban
