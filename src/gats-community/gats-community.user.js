@@ -377,7 +377,7 @@ const GCL = {
     'use strict';
 
     const WS_URL = GCL.cfg.WORKER_URL.replace(/^http/, 'wss') + '/presence';
-    let sock = null, room = null, selfPid = null;
+    let sock = null, room = null, selfPid = null, selfGname = null;
     let hbTimer = null, retryTimer = null, retries = 0, want = false;
     let handlers = {};
 
@@ -404,7 +404,7 @@ const GCL = {
         s.onopen = () => {
             retries = 0;
             hbTimer = setInterval(() => { if (s.readyState === 1) s.send('ping'); }, 25000);
-            if (selfPid) send({ t: 'hello', pid: selfPid });
+            if (selfPid) send({ t: 'hello', pid: selfPid, gname: selfGname || '' });
         };
         s.onmessage = (ev) => {
             if (ev.data === 'pong') return;
@@ -432,8 +432,8 @@ const GCL = {
         setHandlers: (h) => { handlers = h; },
         setRoom: (r) => { if (r !== room) { room = r; if (sock) disconnect(); } if (GCL.auth.isLoggedIn()) { want = true; connect(); } },
         getRoom: () => room,
-        hello: (pid) => { selfPid = pid; if (isOpen()) send({ t: 'hello', pid }); else connect(); },
-        bye: () => { selfPid = null; send({ t: 'bye' }); },
+        hello: (pid, gname) => { selfPid = pid; if (typeof gname === 'string') selfGname = gname; if (isOpen()) send({ t: 'hello', pid, gname: selfGname || '' }); else connect(); },
+        bye: () => { selfPid = null; selfGname = null; send({ t: 'bye' }); },
         lookup: (ids) => send({ t: 'lookup', ids }),
         isOpen,
         disconnect,
@@ -452,10 +452,12 @@ const GCL = {
 
     const ghosts = {};         // id -> last known player data
     const LAZY_IDS = {};       // id -> resolved community username
+    const PRESENCE_CLAIMS = {}; // id -> { name, gname }; accepted only when gname matches the d-frame username
     let INJECT_MESSAGES = [];  // frames appended to the next outgoing batch
     const lookupState = {};    // id -> { tries, next }
     let nextLookupAt = 0;
     let selfId = null;
+    let selfGname = null;
 
     const isFilled = (v) => v !== undefined && v !== '';
     function mergeFields(target, source, fields) {
@@ -508,10 +510,24 @@ const GCL = {
         INJECT_MESSAGES.push(PLAYER_REINIT, PLAYER_UPDATE);
     }
 
-    function applyName(pid, name) {
+    function applyName(pid, name, gname) {
         if (pid === selfId) return;
+        if (typeof name !== 'string' || typeof gname !== 'string' || !gname) {
+            delete LAZY_IDS[pid];
+            delete PRESENCE_CLAIMS[pid];
+            return;
+        }
+        PRESENCE_CLAIMS[pid] = { name, gname };
+        const ghost = ghosts[pid];
+        if (!ghost) { delete LAZY_IDS[pid]; return; }
+        if (ghost.username !== gname) {
+            // pid reuse or an unverified claim: do not display this community identity.
+            delete LAZY_IDS[pid];
+            delete PRESENCE_CLAIMS[pid];
+            return;
+        }
         LAZY_IDS[pid] = name;
-        if (ghosts[pid]) rebuildPlayer(pid, ghosts[pid]);
+        rebuildPlayer(pid, ghost);
     }
 
     // ---- observe every frame ----
@@ -520,10 +536,11 @@ const GCL = {
         if (!f) return;
         switch (f.code) {
             case 'a': {
-                clearObj(ghosts); clearObj(lookupState);
+                clearObj(ghosts); clearObj(LAZY_IDS); clearObj(PRESENCE_CLAIMS); clearObj(lookupState);
                 selfId = f.id;
+                selfGname = typeof f.msg[18] === 'string' ? f.msg[18] : '';
                 try { GCL.presence.setRoom(new URL(GCL.ws.getCurrentServerUrl()).host.toLowerCase()); } catch (e) {}
-                if (GCL.auth.isLoggedIn()) GCL.presence.hello(selfId);
+                if (GCL.auth.isLoggedIn()) GCL.presence.hello(selfId, selfGname);
                 break;
             }
             case 'b': {
@@ -549,10 +566,12 @@ const GCL = {
                 mergeFields(g, f, ['classCode', 'colorCode', 'x', 'y', 'radius', 'playerAngle', 'armorAmount', 'hp', 'maxBullets',
                     'username', 'ghillie', 'invincible', 'isLeader', 'isPremiumMember', 'teamCode', 'chatBoxOpen']);
                 g.shownName = f.username; // the transformer below overrides this when it swaps the name
+                const claim = PRESENCE_CLAIMS[f.id];
+                if (claim) applyName(f.id, claim.name, claim.gname);
                 break;
             }
             case 'e':
-                delete ghosts[f.id]; delete LAZY_IDS[f.id]; delete lookupState[f.id];
+                delete ghosts[f.id]; delete LAZY_IDS[f.id]; delete PRESENCE_CLAIMS[f.id]; delete lookupState[f.id];
                 break;
         }
     });
@@ -563,7 +582,8 @@ const GCL = {
         if (frame.charCodeAt(0) === 97 || frame.charCodeAt(0) === 100) { // 'a' or 'd'
             const p = frame.split(',');
             if (p[0] === 'a' && GCL.auth.isLoggedIn()) {
-                p[18] = GCL.auth.getUser().username; // own name
+                p[18] = GCL.auth.getUser().username; // own display name
+                if (p.length > 23) p[23] = GCL.auth.getUser().username; // isolatedUsername is a separate field
                 out = p.join(',');
             } else if (p[0] === 'd' && LAZY_IDS[p[1]] && p[1] !== selfId) {
                 p[11] = LAZY_IDS[p[1]];
@@ -603,12 +623,12 @@ const GCL = {
 
     // ---- presence pushes ----
     GCL.presence.setHandlers({
-        roster: (m) => { for (const p of m.players || []) applyName(p.pid, p.name); },
-        join: (m) => applyName(m.pid, m.name),
-        rename: (m) => applyName(m.pid, m.name),
-        names: (m) => { for (const [pid, name] of Object.entries(m.names || {})) applyName(pid, name); },
-        leave: (m) => { delete LAZY_IDS[m.pid]; },
+        roster: (m) => { for (const p of m.players || []) applyName(p.pid, p.name, p.gname); },
+        join: (m) => applyName(m.pid, m.name, m.gname),
+        rename: (m) => applyName(m.pid, m.name, m.gname),
+        names: (m) => { for (const [pid, claim] of Object.entries(m.names || {})) applyName(pid, claim && claim.name, claim && claim.gname); },
+        leave: (m) => { delete LAZY_IDS[m.pid]; delete PRESENCE_CLAIMS[m.pid]; },
     });
 
-    GCL.events.addEventListener('login', () => { if (selfId) GCL.presence.hello(selfId); });
+    GCL.events.addEventListener('login', () => { if (selfId) GCL.presence.hello(selfId, selfGname); });
 })();
