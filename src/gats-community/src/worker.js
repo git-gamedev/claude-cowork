@@ -11,6 +11,11 @@ const KDF = 'c-pbkdf2-600k+hmac-v1';
 const USERNAME_RE = /^[A-Za-z0-9_.-]{3,16}$/; // no commas/pipes: names are spliced into game frames
 const KEY_RE = /^[A-Za-z0-9_-]{43}$/;          // 32 bytes base64url, derived client-side
 const DUMMY_HASH = 'A'.repeat(43);
+const RESERVED_NAMES = new Set([
+  'admin', 'administrator', 'mod', 'moderator', 'staff', 'owner',
+  'system', 'server', 'gats', 'gats.io', 'official', 'support', 'root',
+]);
+const RENAME_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // ---------- encoding / crypto helpers ----------
 const b64u = {
@@ -104,6 +109,14 @@ async function throttle(env, req) {
 }
 
 const isUnique = (e) => /UNIQUE/i.test(String(e && e.message) + String(e && e.cause));
+const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase());
+function isAllowedRoom(room, env) {
+  const value = String(room || '').toLowerCase();
+  if (!new RegExp(env.ROOM_REGEX || '^[a-z0-9.:-]{1,64}$').test(value)) return false;
+  const host = value.split(':')[0];
+  const suffix = String(env.ALLOWED_ROOM_SUFFIX || 'gats.io').toLowerCase();
+  return !!suffix && (host === suffix || host.endsWith('.' + suffix));
+}
 
 async function session(env, user) {
   const iat = Math.floor(Date.now() / 1000);
@@ -119,6 +132,7 @@ const logEvent = (env, uid, type, data, ip, at = Date.now()) =>
 async function register(req, env) {
   const b = await readBody(req);
   if (!b || !USERNAME_RE.test(String(b.username || '')) || !KEY_RE.test(String(b.key || ''))) return json({ error: 'invalid_input' }, 400);
+  if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
   const uid = b64u.enc(crypto.getRandomValues(new Uint8Array(12)));
   const lc = b.username.toLowerCase();
   const hash = await pwHash(env, uid, b.key);
@@ -162,22 +176,29 @@ async function rename(req, env, ctx) {
   if (!c) return json({ error: 'unauthorized' }, 401);
   const b = await readBody(req);
   if (!b || !USERNAME_RE.test(String(b.username || ''))) return json({ error: 'invalid_input' }, 400);
+  if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
   const lc = b.username.toLowerCase();
+  const now = Date.now();
   let r;
   try {
-    // Revocation (ban / token version) is checked inside the UPDATE itself: zero extra reads.
-    r = await env.DB.prepare('UPDATE users SET username=?1, username_lc=?2 WHERE id=?3 AND banned=0 AND token_version=?4')
-      .bind(b.username, lc, c.uid, c.tv).run();
+    // Revocation and rename cooldown are checked inside the same UPDATE.
+    r = await env.DB.prepare('UPDATE users SET username=?1, username_lc=?2, renamed_at=?3 WHERE id=?4 AND banned=0 AND token_version=?5 AND COALESCE(renamed_at,0)<=?6')
+      .bind(b.username, lc, now, c.uid, c.tv, now - RENAME_COOLDOWN_MS).run();
   } catch (e) {
     if (isUnique(e)) return json({ error: 'name_taken' }, 409);
     throw e;
   }
-  if (!r.meta.changes) return json({ error: 'revoked' }, 401);
+  if (!r.meta.changes) {
+    const row = await env.DB.prepare('SELECT banned, token_version, COALESCE(renamed_at,0) AS renamed_at FROM users WHERE id=?1').bind(c.uid).first();
+    if (!row || row.banned || row.token_version !== c.tv) return json({ error: 'revoked' }, 401);
+    const retryAt = Number(row.renamed_at || 0) + RENAME_COOLDOWN_MS;
+    if (retryAt > now) return json({ error: 'rename_cooldown', retryAfter: Math.ceil((retryAt - now) / 1000) }, 429);
+    return json({ error: 'revoked' }, 401);
+  }
   await logEvent(env, c.uid, 'rename', { from: c.name, to: b.username }, await ipHash(env, req)).run();
 
-  const roomRe = new RegExp(env.ROOM_REGEX || '^[a-z0-9.:-]{1,64}$');
   const room = typeof b.room === 'string' ? b.room.toLowerCase() : '';
-  if (roomRe.test(room)) {
+  if (isAllowedRoom(room, env)) {
     ctx.waitUntil(
       env.ROOMS.get(env.ROOMS.idFromName(room))
         .fetch('https://room/rename', { method: 'POST', body: JSON.stringify({ uid: c.uid, name: b.username }) })
@@ -200,7 +221,7 @@ async function presence(req, env) {
   if (!claims) return json({ error: 'unauthorized' }, 401);
 
   const room = (new URL(req.url).searchParams.get('room') || '').toLowerCase();
-  if (!new RegExp(env.ROOM_REGEX || '^[a-z0-9.:-]{1,64}$').test(room)) return json({ error: 'bad_room' }, 400);
+  if (!isAllowedRoom(room, env)) return json({ error: 'bad_room' }, 400);
 
   const h = new Headers(req.headers);
   h.set('x-uid', claims.uid); h.set('x-name', claims.name); h.set('x-tv', String(claims.tv)); // overwrite any client-sent values
@@ -218,10 +239,9 @@ async function adminBan(req, env) {
   if (!row) return json({ error: 'not_found' }, 404);
   await logEvent(env, row.id, banned ? 'ban' : 'unban', { reason: b.reason || null }, null).run();
   // Optional instant kick: pass the room names the user is likely in. Others pick it up within ~5 min.
-  const roomRe = new RegExp(env.ROOM_REGEX || '^[a-z0-9.:-]{1,64}$');
   for (const r of (Array.isArray(b.rooms) ? b.rooms : []).slice(0, 20)) {
     const room = String(r).toLowerCase();
-    if (banned && roomRe.test(room)) {
+    if (banned && isAllowedRoom(room, env)) {
       await env.ROOMS.get(env.ROOMS.idFromName(room)).fetch('https://room/kick', { method: 'POST', body: JSON.stringify({ uid: row.id }) }).catch(() => {});
     }
   }
