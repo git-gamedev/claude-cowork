@@ -527,12 +527,16 @@ const GCL = {
                 break;
             }
             case 'b': {
-                const g = ghosts[f.id] || (ghosts[f.id] = {});
+                // Movement updates do not create entities; only a real d-frame initializes a player.
+                const g = ghosts[f.id];
+                if (!g) break;
                 mergeFields(g, f, ['x', 'y', 'spdX', 'spdY', 'playerAngle']);
                 break;
             }
             case 'c': {
-                const g = ghosts[f.id] || (ghosts[f.id] = {});
+                // Aux/status updates for an unknown id can arrive late after an e-frame; ignore them.
+                const g = ghosts[f.id];
+                if (!g) break;
                 mergeFields(g, f, ['currentBullets', 'shooting', 'reloading', 'hp', 'beingHit', 'armorAmount', 'radius',
                     'ghillie', 'maxBullets', 'invincible', 'dashing', 'chatBoxOpen', 'isLeader', 'colorCode', 'chatMessage']);
                 if (isFilled(g.radius) && isFilled(g.colorCode)) g.hasStatus = true;
