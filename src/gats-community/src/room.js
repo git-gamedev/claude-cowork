@@ -18,15 +18,18 @@ export class Room extends DurableObject {
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
   }
 
+  remember(uid, rec) {
+    if (this.cache.size >= 2000) this.cache.clear(); // hard cap on hot-cache memory
+    this.cache.set(uid, rec);
+    return rec;
+  }
+
   async userRec(uid) {
     const c = this.cache.get(uid);
     if (c && Date.now() - c.at < CACHE_TTL) return c;
     const row = await this.env.DB.prepare('SELECT username,token_version,banned FROM users WHERE id=?1').bind(uid).first();
     if (!row) { this.cache.delete(uid); return null; }
-    if (this.cache.size > 2000) this.cache.clear();
-    const rec = { name: row.username, tv: row.token_version, banned: !!row.banned, at: Date.now() };
-    this.cache.set(uid, rec);
-    return rec;
+    return this.remember(uid, { name: row.username, tv: row.token_version, banned: !!row.banned, at: Date.now() });
   }
 
   async fetch(request) {
@@ -92,17 +95,22 @@ export class Room extends DurableObject {
         const pid = String(m.pid ?? '');
         const gname = typeof m.gname === 'string' && m.gname.length <= 32 ? m.gname : '';
         if (!PID_RE.test(pid)) { this.send(ws, { t: 'err', code: 'bad_pid' }); break; }
-        const taken = this.ctx.getWebSockets().some((o) => {
-          if (o === ws) return false;
+        // one pass over the sockets: collision check + roster (self included, in socket order)
+        const players = [];
+        let taken = false;
+        for (const o of this.ctx.getWebSockets()) {
+          if (o === ws) { players.push({ pid, name: att.name, gname }); continue; }
           const a = o.deserializeAttachment();
-          return a && a.pid === pid;
-        });
+          if (!a || !a.pid) continue;
+          if (a.pid === pid) { taken = true; break; }
+          players.push({ pid: a.pid, name: a.name, gname: a.gname || '' });
+        }
         if (taken) { this.send(ws, { t: 'err', code: 'pid_taken' }); break; } // first claim wins
         if (att.pid && att.pid !== pid) this.broadcast({ t: 'leave', pid: att.pid }, ws);
         att.pid = pid;
         att.gname = gname;
         ws.serializeAttachment(att);
-        this.send(ws, { t: 'roster', players: this.roster() });
+        this.send(ws, { t: 'roster', players });
         this.broadcast({ t: 'join', pid, name: att.name, gname }, ws);
         return;
       }
@@ -128,22 +136,24 @@ export class Room extends DurableObject {
 
   async alarm() {
     const now = Date.now();
-    let live = [];
+    const live = []; // [ws, attachment] pairs: each attachment is deserialized once per sweep
     for (const ws of this.ctx.getWebSockets()) {
       const a = ws.deserializeAttachment();
       const auto = this.ctx.getWebSocketAutoResponseTimestamp(ws);
       const last = Math.max(a ? a.seen : 0, auto ? auto.getTime() : 0);
       if (!a || now - last > TIMEOUT_MS) { this.drop(ws); try { ws.close(4001, 'timeout'); } catch {} }
-      else live.push(ws);
+      else live.push([ws, a]);
     }
     // Alarm instances are recreated after hibernation, so an in-memory timestamp is not durable.
     // Revalidate on every active-room sweep so bans and token-version bumps eventually take effect.
-    if (live.length) await this.revalidate(live);
-    if (live.length) await this.ctx.storage.setAlarm(Date.now() + ALARM_MS);
+    if (live.length) {
+      await this.revalidate(live);
+      await this.ctx.storage.setAlarm(Date.now() + ALARM_MS);
+    }
   }
 
-  async revalidate(socks) {
-    const uids = [...new Set(socks.map((w) => w.deserializeAttachment().uid))];
+  async revalidate(pairs) {
+    const uids = [...new Set(pairs.map(([, a]) => a.uid))];
     const rows = new Map();
     for (let i = 0; i < uids.length; i += 80) {
       const chunk = uids.slice(i, i + 80);
@@ -151,11 +161,11 @@ export class Room extends DurableObject {
       const res = await this.env.DB.prepare(q).bind(...chunk).all();
       for (const r of res.results) rows.set(r.id, r);
     }
-    for (const ws of socks) {
-      const a = ws.deserializeAttachment();
+    const now = Date.now();
+    for (const [ws, a] of pairs) {
       const r = rows.get(a.uid);
       if (!r || r.banned || r.token_version !== a.tv) { this.drop(ws); try { ws.close(4002, 'revoked'); } catch {} continue; }
-      this.cache.set(a.uid, { name: r.username, tv: r.token_version, banned: false, at: Date.now() });
+      this.remember(a.uid, { name: r.username, tv: r.token_version, banned: false, at: now });
       if (r.username !== a.name) {
         a.name = r.username; ws.serializeAttachment(a);
         if (a.pid) this.broadcast({ t: 'rename', pid: a.pid, name: a.name, gname: a.gname || '' });

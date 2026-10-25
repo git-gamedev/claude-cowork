@@ -7,6 +7,7 @@ import { Gate, ipKey } from './gate.js';
 export { Room, Gate };
 
 const enc = new TextEncoder();
+const dec = new TextDecoder();
 const TOKEN_TTL_S = 7 * 24 * 3600;
 const KDF = 'c-pbkdf2-600k+hmac-v1';
 const USERNAME_RE = /^[A-Za-z0-9_.-]{3,16}$/; // no commas/pipes: names are spliced into game frames
@@ -27,18 +28,24 @@ const b64u = {
     return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   },
   dec(str) {
-    const s = str.replace(/-/g, '+').replace(/_/g, '/');
-    return Uint8Array.from(atob(s + '='.repeat((4 - (s.length % 4)) % 4)), (c) => c.charCodeAt(0));
+    const s = atob(str.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (str.length % 4)) % 4));
+    const out = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    return out;
   },
 };
 
-const keyCache = new Map();
+// One HMAC key per isolate (the secret does not change at runtime): a single slot instead of a
+// Map keyed by the secret string, so the secret text is not retained a second time.
+let keyP = null;
+let keyFor = null;
 function hmacKey(secret) {
   if (!secret) throw new Error('missing secret');
-  if (!keyCache.has(secret)) {
-    keyCache.set(secret, crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']));
+  if (keyFor !== secret) {
+    keyFor = secret;
+    keyP = crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
   }
-  return keyCache.get(secret);
+  return keyP;
 }
 
 async function signToken(env, claims) {
@@ -53,7 +60,7 @@ async function verifyToken(env, token) {
     if (v !== 'v1' || !payload || !sig) return null;
     const ok = await crypto.subtle.verify('HMAC', await hmacKey(env.TOKEN_SECRET), b64u.dec(sig), enc.encode(`v1.${payload}`));
     if (!ok) return null;
-    const claims = JSON.parse(new TextDecoder().decode(b64u.dec(payload)));
+    const claims = JSON.parse(dec.decode(b64u.dec(payload)));
     if (!claims.exp || claims.exp * 1000 < Date.now()) return null;
     return claims;
   } catch {
