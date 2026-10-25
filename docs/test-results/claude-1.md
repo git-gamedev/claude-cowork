@@ -7,7 +7,7 @@ SHA tested: c7a1544
 | G2 | claim with matching gname swaps name, injects d+c | same | PASS | |
 | G3 | gname mismatch rejected | same | PASS | not cryptographic identity (see #11) |
 | G4 | blank-field (delta) c frame keeps radius/colour | same | PASS | |
-| G5 | rename rebuild replays old chat bubble | same | FAIL then fixed | #26 fixed in 329c2e5; PASS at c7a1544 |
+| G5 | rename rebuild replays old chat bubble | same | FAIL then fixed | #24 fixed in 329c2e5; PASS at c7a1544 |
 | G6 | own a-frame fields 18 and 23 get community name; hello sends ORIGINAL in-game name | same | PASS | |
 | G7 | lookup throttle per ghost | same | PASS | |
 | G8 | e-frame then pid reuse with new name not mislabelled | same | PASS | |
