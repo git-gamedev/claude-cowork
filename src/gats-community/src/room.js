@@ -1,7 +1,7 @@
 // Durable Objects.
 //  Room: one per gats server. Hibernating WebSockets. Per-socket state lives in the socket
 //        attachment (survives hibernation); no SQLite writes. D1 is read only as a fallback.
-//  Gate: one per client IP. In-memory sliding-window throttle for /login /register /rename.
+//  Gate (rate limiting) now lives in gate.js.
 
 import { DurableObject } from 'cloudflare:workers';
 
@@ -183,16 +183,5 @@ export class Room extends DurableObject {
   drop(ws) {
     const a = ws.deserializeAttachment();
     if (a && a.pid) { this.broadcast({ t: 'leave', pid: a.pid }, ws); a.pid = null; a.gname = ''; try { ws.serializeAttachment(a); } catch {} }
-  }
-}
-
-export class Gate extends DurableObject {
-  hits = [];
-  async fetch() {
-    const now = Date.now();
-    this.hits = this.hits.filter((t) => now - t < 10 * 60_000);
-    if (this.hits.length >= 10) return new Response('slow down', { status: 429 });
-    this.hits.push(now);
-    return new Response('ok');
   }
 }

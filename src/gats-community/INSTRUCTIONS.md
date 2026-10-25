@@ -138,3 +138,19 @@ Avoid putting your admin key in shell history or a shared terminal transcript.
 - [ ] Ban a disposable account and verify the user's socket is eventually closed by a room alarm.
 - [ ] Inspect Cloudflare logs/usage after tests.
 - [ ] Complete local automated tests and have a second reviewer inspect the security changes before calling the mission done.
+
+## Rate limiting and signup cap (Gate)
+
+`src/gate.js` keeps small counters in Durable Objects, one record per key, persisted so they survive eviction:
+
+| What | Limit | Counts |
+|---|---|---|
+| Login failures per IP (IPv6 grouped by /64) | 20 per 15 min | failures only |
+| Login failures per account | 10 per 15 min | failures only; cleared on success |
+| Register per IP /64 | 5 per hour | every attempt |
+| Register globally | `MAX_REG_PER_DAY` (default 300) per UTC day | every attempt; protects the D1 free write quota |
+| Rename per IP /64 | 10 per hour | every attempt (plus the 24 h per-account cooldown) |
+
+Known limits: someone can still lock a specific account for up to 15 minutes by failing 10 logins (the price of a per-account limit); an attacker with many separate IPv6 /64s or IPv4 addresses can spread attempts, and the PBKDF2 cost plus the server-side HMAC is the real defence. Gate fails open if a Gate DO errors, so an outage there cannot lock out all players. Raise `MAX_REG_PER_DAY` in `wrangler.toml` for a launch day.
+
+Run the local tests with `node --test tests/gate.test.mjs` (Node 20+).

@@ -8,6 +8,8 @@ ALLOWED_ORIGINS = "https://gats.io,https://www.gats.io"
 # Room names (= gats server host); the worker also requires this DNS suffix.
 ROOM_REGEX = "^[a-z0-9.:-]{1,64}$"
 ALLOWED_ROOM_SUFFIX = "gats.io"
+# Global cap on new accounts per UTC day (protects the D1 free-plan write quota).
+MAX_REG_PER_DAY = "300"
 
 [[d1_databases]]
 binding = "DB"

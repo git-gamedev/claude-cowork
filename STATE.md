@@ -40,3 +40,8 @@ Worker and userscript source changes were syntax-parsed in the relay workflow, b
 
 ## Incoming independent collaborator and legacy project
 The fifth collaborator has separate research/work. Ask them to share findings, artifacts, and links before duplicate work. They also received the older GitGamedev project that the user restarted after a DDoS exposed a flawed structure. Its repository/path is not identified in this relay repo yet; ask them to link or provide that project and relevant architecture notes so the team can compare lessons.
+
+## sonnet-1 update (takeover)
+- Gate rewritten in src/gats-community/src/gate.js: persisted counters (survive eviction), failures-only login limits (IP /64 + per account), register/rename limits, global daily signup cap MAX_REG_PER_DAY. Fixes #9, covers the remaining #10 item; #7 premise does not apply to this base (no D1 writes on failed login).
+- Tests: src/gats-community/tests/gate.test.mjs (5 passing). Still missing: tests for tokens/KDF and Room (part of #6).
+- Still unverified: real gats server hostnames vs ALLOWED_ROOM_SUFFIX; no Cloudflare/live-game run.

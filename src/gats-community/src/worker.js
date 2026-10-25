@@ -2,7 +2,8 @@
 // Routes: POST /register /login /refresh /rename /admin/ban, GET /presence (WebSocket), GET /health
 // Secrets: TOKEN_SECRET, PEPPER, ADMIN_KEY.  Bindings: DB (D1), ROOMS + GATE (Durable Objects).
 
-import { Room, Gate } from './room.js';
+import { Room } from './room.js';
+import { Gate, ipKey } from './gate.js';
 export { Room, Gate };
 
 const enc = new TextEncoder();
@@ -102,11 +103,30 @@ async function authClaims(req, env) {
   return h.startsWith('Bearer ') ? verifyToken(env, h.slice(7)) : null;
 }
 
-async function throttle(env, req) {
-  const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
-  const res = await env.GATE.get(env.GATE.idFromName(ip)).fetch('https://gate/hit');
-  return res.status !== 429;
+// Rate limiting via Gate DOs. Fails OPEN if a Gate is unreachable, so an outage there cannot lock everyone out.
+async function gate(env, key, path, limit, winSec) {
+  try {
+    const res = await env.GATE.get(env.GATE.idFromName(key)).fetch(`https://gate${path}?limit=${limit}&win=${winSec}`);
+    const body = await res.json();
+    return { locked: res.status === 429 || !!body.locked, n: body.n || 0 };
+  } catch (e) {
+    console.error('gate error', key, e && e.message);
+    return { locked: false, n: 0 };
+  }
 }
+const clientIp = (req) => ipKey(req.headers.get('CF-Connecting-IP'));
+
+// register: 5 per IP/64 per hour, plus a global daily cap (D1 free plan is ~100k row writes/day).
+async function throttleRegister(env, req) {
+  const day = new Date().toISOString().slice(0, 10);
+  const cap = Math.max(1, Number(env.MAX_REG_PER_DAY) || 300);
+  const [ip, all] = await Promise.all([
+    gate(env, 'reg:' + clientIp(req), '/hit', 5, 3600),
+    gate(env, 'regday:' + day, '/hit', cap, 86400),
+  ]);
+  return !(ip.locked || all.locked);
+}
+const throttleRename = async (env, req) => !(await gate(env, 'ren:' + clientIp(req), '/hit', 10, 3600)).locked;
 
 const isUnique = (e) => /UNIQUE/i.test(String(e && e.message) + String(e && e.cause));
 const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase());
@@ -130,6 +150,7 @@ const logEvent = (env, uid, type, data, ip, at = Date.now()) =>
 
 // ---------- handlers ----------
 async function register(req, env) {
+  if (!(await throttleRegister(env, req))) return json({ error: 'rate_limited' }, 429);
   const b = await readBody(req);
   if (!b || !USERNAME_RE.test(String(b.username || '')) || !KEY_RE.test(String(b.key || ''))) return json({ error: 'invalid_input' }, 400);
   if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
@@ -154,10 +175,18 @@ async function login(req, env) {
   const b = await readBody(req);
   const lc = String((b && b.login) || '').toLowerCase();
   if (!b || !USERNAME_RE.test(lc) || !KEY_RE.test(String(b.key || ''))) return json({ error: 'invalid_input' }, 400);
+  // Failures only are counted: 20 per IP/64 and 10 per account per 15 min. No D1 writes, state survives eviction.
+  const ipk = 'li:' + clientIp(req), lk = 'll:' + lc;
+  const [gi, gl] = await Promise.all([gate(env, ipk, '/check', 20, 900), gate(env, lk, '/check', 10, 900)]);
+  if (gi.locked || gl.locked) return json({ error: 'rate_limited' }, 429);
   const row = await env.DB.prepare('SELECT id,username,pw_hash,banned,ban_reason,token_version FROM users WHERE login=?1').bind(lc).first();
   // Always do one HMAC verify so unknown users cost the same as wrong passwords.
   const ok = row ? await pwVerify(env, row.id, b.key, row.pw_hash) : (await pwVerify(env, '0', b.key, DUMMY_HASH), false);
-  if (!ok) return json({ error: 'invalid_credentials' }, 401);
+  if (!ok) {
+    await Promise.all([gate(env, ipk, '/fail', 20, 900), gate(env, lk, '/fail', 10, 900)]);
+    return json({ error: 'invalid_credentials' }, 401);
+  }
+  if (gl.n > 0) await gate(env, lk, '/ok', 10, 900);
   if (row.banned) return json({ error: 'banned', reason: row.ban_reason || null }, 403);
   await logEvent(env, row.id, 'login', null, await ipHash(env, req)).run();
   return json(await session(env, row));
@@ -174,6 +203,7 @@ async function refresh(req, env) {
 async function rename(req, env, ctx) {
   const c = await authClaims(req, env);
   if (!c) return json({ error: 'unauthorized' }, 401);
+  if (!(await throttleRename(env, req))) return json({ error: 'rate_limited' }, 429);
   const b = await readBody(req);
   if (!b || !USERNAME_RE.test(String(b.username || ''))) return json({ error: 'invalid_input' }, 400);
   if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
@@ -258,9 +288,6 @@ export default {
       if (pathname === '/admin/ban' && req.method === 'POST') return await adminBan(req, env);
       if (req.method !== 'POST') return json({ error: 'not_found' }, 404);
 
-      if (['/register', '/login', '/rename'].includes(pathname) && !(await throttle(env, req))) {
-        return json({ error: 'rate_limited' }, 429);
-      }
       if (pathname === '/register') return await register(req, env);
       if (pathname === '/login') return await login(req, env);
       if (pathname === '/refresh') return await refresh(req, env);
