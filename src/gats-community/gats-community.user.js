@@ -388,6 +388,11 @@ const GCL = {
         if (retryTimer || !want) return;
         retries++;
         if (retries === 3) GCL.auth.refresh(); // repeated failures may mean a revoked token
+        if (retries > 8) {                      // stop: endless retries would burn the Worker's free request cap
+            want = false;
+            console.warn('[gcl] presence gave up after repeated failures. Room name sent: "' + room + '". If you run this system yourself, check that it matches ALLOWED_ROOM_SUFFIX in wrangler.toml.');
+            return;
+        }
         const delay = Math.min(60000, 2000 * 2 ** retries) + Math.random() * 1000;
         retryTimer = setTimeout(() => { retryTimer = null; connect(); }, delay);
     }
@@ -396,6 +401,7 @@ const GCL = {
         if (sock || !room || !GCL.auth.isLoggedIn()) return;
         want = true;
         let s;
+        if (retries === 0) console.info('[gcl] presence room:', room);
         try {
             // Token rides in the subprotocol header, not the URL.
             s = new GCL.NativeWebSocket(`${WS_URL}?room=${encodeURIComponent(room)}`, ['gcl.v1', GCL.auth.getToken()]);
