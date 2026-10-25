@@ -35,17 +35,19 @@ const b64u = {
   },
 };
 
-// One HMAC key per isolate (the secret does not change at runtime): a single slot instead of a
-// Map keyed by the secret string, so the secret text is not retained a second time.
-let keyP = null;
-let keyFor = null;
+// The Worker uses exactly two HMAC secrets (TOKEN_SECRET, PEPPER). A single slot thrashed between them
+// (2 importKey calls per /login and /register, measured), and a Map keyed by the secret retained the secret
+// text a second time. Two fixed slots: no growth, no re-imports. A third secret would evict round-robin.
+const slots = [{ s: null, p: null }, { s: null, p: null }];
+let nextSlot = 0;
 function hmacKey(secret) {
   if (!secret) throw new Error('missing secret');
-  if (keyFor !== secret) {
-    keyFor = secret;
-    keyP = crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
-  }
-  return keyP;
+  for (const x of slots) if (x.s === secret) return x.p;
+  const x = slots[nextSlot];
+  nextSlot ^= 1;
+  x.s = secret;
+  x.p = crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
+  return x.p;
 }
 
 async function signToken(env, claims) {
@@ -137,9 +139,16 @@ const throttleRename = async (env, req) => !(await gate(env, 'ren:' + clientIp(r
 
 const isUnique = (e) => /UNIQUE/i.test(String(e && e.message) + String(e && e.cause));
 const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase());
+// Compile the room regex once per isolate instead of once per call (the env value never changes at runtime).
+let roomReSrc, roomReVal;
+function roomRe(src) {
+  src = src || '^[a-z0-9.:-]{1,64}$';
+  if (src !== roomReSrc) { roomReSrc = src; roomReVal = new RegExp(src); }
+  return roomReVal;
+}
 function isAllowedRoom(room, env) {
   const value = String(room || '').toLowerCase();
-  if (!new RegExp(env.ROOM_REGEX || '^[a-z0-9.:-]{1,64}$').test(value)) return false;
+  if (!roomRe(env.ROOM_REGEX).test(value)) return false;
   const host = value.split(':')[0];
   const suffix = String(env.ALLOWED_ROOM_SUFFIX || 'gats.io').toLowerCase();
   return !!suffix && (host === suffix || host.endsWith('.' + suffix));
@@ -249,11 +258,18 @@ async function rename(req, env, ctx) {
   return json(await session(env, { id: c.uid, username: b.username, token_version: c.tv }));
 }
 
+// Parsed once per isolate: the allowed-origin list never changes at runtime.
+let originsSrc, originsVal;
+function originList(src) {
+  src = src || 'https://gats.io,https://www.gats.io';
+  if (src !== originsSrc) { originsSrc = src; originsVal = src.split(',').map((x) => x.trim()); }
+  return originsVal;
+}
+
 async function presence(req, env) {
   if (req.headers.get('Upgrade') !== 'websocket') return json({ error: 'expected_websocket' }, 426);
   const origin = req.headers.get('Origin');
-  const allowed = (env.ALLOWED_ORIGINS || 'https://gats.io,https://www.gats.io').split(',').map((s) => s.trim());
-  if (origin && !allowed.includes(origin)) return json({ error: 'forbidden_origin' }, 403);
+  if (origin && !originList(env.ALLOWED_ORIGINS).includes(origin)) return json({ error: 'forbidden_origin' }, 403);
 
   // Token travels in Sec-WebSocket-Protocol so it never appears in a URL or access log.
   const protos = (req.headers.get('Sec-WebSocket-Protocol') || '').split(',').map((s) => s.trim());
