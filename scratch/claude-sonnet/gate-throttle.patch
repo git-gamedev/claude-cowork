@@ -1,0 +1,335 @@
+diff --git a/src/gats-community/schema_003.sql b/src/gats-community/schema_003.sql
+new file mode 100644
+index 0000000..94da6c1
+--- /dev/null
++++ b/src/gats-community/schema_003.sql
+@@ -0,0 +1,2 @@
++-- Migration 003: index for the per-IP registration cap (events.type, ip_hash, at).
++CREATE INDEX IF NOT EXISTS idx_events_reg ON events(type, ip_hash, at);
+diff --git a/src/gats-community/src/gate-core.js b/src/gats-community/src/gate-core.js
+new file mode 100644
+index 0000000..6fde2b5
+--- /dev/null
++++ b/src/gats-community/src/gate-core.js
+@@ -0,0 +1,84 @@
++// Failure-only brute-force throttle (fixes #9). Pure logic + injected storage, so it can be unit-tested in node.
++//  - counts FAILED logins only (successes never consume the window; shared NATs stay usable)
++//  - three scopes: ip (IPv6 normalised to /64), (ip,login) pair, login across all IPs
++//  - the pair lock trips first, so a stranger cannot cheaply lock a victim out; the account-wide lock needs many failures
++//  - counters live in memory; from PERSIST_FROM failures on they are also written to DO storage, so an attacker
++//    cannot reset them just by waiting for the object to be evicted. Writes are bounded (<= LIMIT per key per window).
++
++export const GATE = {
++  WINDOW_MS: 15 * 60_000,
++  LOCK_MS: 10 * 60_000,
++  LIMITS: { ip: 30, pair: 6, login: 40 },
++  PERSIST_FROM: 3,
++};
++
++export function ipKey(ip) {
++  const s = String(ip || 'unknown').toLowerCase();
++  if (!s.includes(':') || s.includes('.')) return s; // IPv4, IPv4-mapped, or 'unknown'
++  const [head, tail] = s.split('::');
++  const h = head ? head.split(':') : [];
++  const t = tail ? tail.split(':') : [];
++  const groups = s.includes('::') ? [...h, ...Array(Math.max(8 - h.length - t.length, 0)).fill('0'), ...t] : h;
++  return groups.slice(0, 4).map((g) => g.padStart(4, '0')).join(':') + '::/64';
++}
++
++export class GateCore {
++  // store: { list(): Promise<[key, value][]>, put(k, v), delete(k) }
++  constructor(store) { this.store = store; this.mem = new Map(); }
++
++  async load(now = Date.now()) {
++    for (const [k, v] of await this.store.list()) {
++      if (v && v.reset > now) this.mem.set(k, v);
++      else await this.store.delete(k);
++    }
++  }
++
++  keys(ip, login) {
++    return { ip: 'g:ip:' + ip, pair: 'g:pr:' + ip + '|' + login, login: 'g:lg:' + login };
++  }
++
++  entry(k, now) {
++    const e = this.mem.get(k);
++    if (!e || e.reset <= now) { this.mem.delete(k); return null; }
++    return e;
++  }
++
++  lockedFor(k, limit, now) {
++    const e = this.entry(k, now);
++    return e && e.n >= limit ? Math.ceil((e.reset - now) / 1000) : 0;
++  }
++
++  check(ip, login, now = Date.now()) {
++    const k = this.keys(ip, login), L = GATE.LIMITS;
++    const retryAfter = Math.max(this.lockedFor(k.ip, L.ip, now), this.lockedFor(k.pair, L.pair, now), this.lockedFor(k.login, L.login, now));
++    const pe = this.entry(k.pair, now);
++    return { locked: retryAfter > 0, retryAfter, pairFails: pe ? pe.n : 0 };
++  }
++
++  async fail(ip, login, now = Date.now()) {
++    const k = this.keys(ip, login), L = GATE.LIMITS;
++    for (const [key, limit] of [[k.ip, L.ip], [k.pair, L.pair], [k.login, L.login]]) await this.bump(key, limit, now);
++    if (this.mem.size > 5000) await this.sweep(now);
++  }
++
++  async bump(key, limit, now) {
++    let e = this.entry(key, now) || { n: 0, reset: now + GATE.WINDOW_MS };
++    if (e.n >= limit) return;                        // already locked: no more writes
++    e.n++;
++    if (e.n >= limit) e.reset = now + GATE.LOCK_MS;  // lock for LOCK_MS from the tripping failure
++    this.mem.set(key, e);
++    // Small limits (pair) persist every failure from PERSIST_FROM; broad scopes (ip, login) only every 5th and at lock time,
++    // which bounds storage writes to ~20 per attacker per window instead of one per guess.
++    if (e.n >= GATE.PERSIST_FROM && (limit <= 10 || e.n % 5 === 0 || e.n >= limit)) await this.store.put(key, e);
++  }
++
++  async ok(ip, login) {
++    const key = this.keys(ip, login).pair;
++    if (this.mem.delete(key)) await this.store.delete(key);
++  }
++
++  async sweep(now = Date.now()) {
++    for (const [k, e] of this.mem) if (e.reset <= now) { this.mem.delete(k); await this.store.delete(k); }
++    if (this.mem.size > 5000) this.mem.clear();      // last resort; locks persisted in storage reload on next wake
++  }
++}
+diff --git a/src/gats-community/src/room.js b/src/gats-community/src/room.js
+index 2851c44..b6d14bb 100644
+--- a/src/gats-community/src/room.js
++++ b/src/gats-community/src/room.js
+@@ -1,9 +1,10 @@
+ // Durable Objects.
+ //  Room: one per gats server. Hibernating WebSockets. Per-socket state lives in the socket
+ //        attachment (survives hibernation); no SQLite writes. D1 is read only as a fallback.
+-//  Gate (rate limiting) now lives in gate.js.
++//  Gate: ONE global object. Failure-only login throttle (see gate-core.js).
+ 
+ import { DurableObject } from 'cloudflare:workers';
++import { GateCore } from './gate-core.js';
+ 
+ const TIMEOUT_MS = 90_000;   // drop sockets silent for this long
+ const ALARM_MS = 60_000;     // sweep interval while anyone is connected
+@@ -185,3 +186,24 @@ export class Room extends DurableObject {
+     if (a && a.pid) { this.broadcast({ t: 'leave', pid: a.pid }, ws); a.pid = null; a.gname = ''; try { ws.serializeAttachment(a); } catch {} }
+   }
+ }
++
++export class Gate extends DurableObject {
++  // One global instance ('g'). POST /check | /fail | /ok with { ip, login }.
++  constructor(ctx, env) {
++    super(ctx, env);
++    this.core = new GateCore({
++      list: async () => [...(await ctx.storage.list({ prefix: 'g:' })).entries()],
++      put: (k, v) => ctx.storage.put(k, v),
++      delete: (k) => ctx.storage.delete(k),
++    });
++    ctx.blockConcurrencyWhile(() => this.core.load());
++  }
++  async fetch(request) {
++    const op = new URL(request.url).pathname.slice(1);
++    const { ip, login } = await request.json();
++    if (op === 'check') return Response.json(this.core.check(ip, login));
++    if (op === 'fail') { await this.core.fail(ip, login); return Response.json({ ok: true }); }
++    if (op === 'ok') { await this.core.ok(ip, login); return Response.json({ ok: true }); }
++    return new Response('not found', { status: 404 });
++  }
++}
+diff --git a/src/gats-community/src/worker.js b/src/gats-community/src/worker.js
+index 837990f..489368c 100644
+--- a/src/gats-community/src/worker.js
++++ b/src/gats-community/src/worker.js
+@@ -2,8 +2,8 @@
+ // Routes: POST /register /login /refresh /rename /admin/ban, GET /presence (WebSocket), GET /health
+ // Secrets: TOKEN_SECRET, PEPPER, ADMIN_KEY.  Bindings: DB (D1), ROOMS + GATE (Durable Objects).
+ 
+-import { Room } from './room.js';
+-import { Gate, ipKey } from './gate.js';
++import { Room, Gate } from './room.js';
++import { ipKey } from './gate-core.js';
+ export { Room, Gate };
+ 
+ const enc = new TextEncoder();
+@@ -75,7 +75,7 @@ async function pwVerify(env, uid, key, stored) {
+ }
+ 
+ async function ipHash(env, req) {
+-  const ip = req.headers.get('CF-Connecting-IP') || 'unknown';
++  const ip = ipKey(req.headers.get('CF-Connecting-IP'));
+   const d = await crypto.subtle.digest('SHA-256', enc.encode(ip + '|' + env.TOKEN_SECRET));
+   return b64u.enc(d).slice(0, 16);
+ }
+@@ -103,33 +103,23 @@ async function authClaims(req, env) {
+   return h.startsWith('Bearer ') ? verifyToken(env, h.slice(7)) : null;
+ }
+ 
+-// Rate limiting via Gate DOs. Fails OPEN if a Gate is unreachable, so an outage there cannot lock everyone out.
+-async function gate(env, key, path, limit, winSec) {
++// Failure-only throttle lives in the global Gate DO. Fails open if the Gate is unavailable
++// (availability over throttling; the 600k client-side PBKDF2 still prices every guess).
++async function gateCall(env, op, ip, login) {
+   try {
+-    const res = await env.GATE.get(env.GATE.idFromName(key)).fetch(`https://gate${path}?limit=${limit}&win=${winSec}`);
+-    const body = await res.json();
+-    return { locked: res.status === 429 || !!body.locked, n: body.n || 0 };
++    const res = await env.GATE.get(env.GATE.idFromName('g')).fetch('https://gate/' + op, { method: 'POST', body: JSON.stringify({ ip, login }) });
++    return await res.json();
+   } catch (e) {
+-    console.error('gate error', key, e && e.message);
+-    return { locked: false, n: 0 };
++    console.error('gate error', e && e.message);
++    return { locked: false, pairFails: 0 };
+   }
+ }
+-const clientIp = (req) => ipKey(req.headers.get('CF-Connecting-IP'));
+-
+-// register: 5 per IP/64 per hour, plus a global daily cap (D1 free plan is ~100k row writes/day).
+-async function throttleRegister(env, req) {
+-  const day = new Date().toISOString().slice(0, 10);
+-  const cap = Math.max(1, Number(env.MAX_REG_PER_DAY) || 300);
+-  const [ip, all] = await Promise.all([
+-    gate(env, 'reg:' + clientIp(req), '/hit', 5, 3600),
+-    gate(env, 'regday:' + day, '/hit', cap, 86400),
+-  ]);
+-  return !(ip.locked || all.locked);
+-}
+-const throttleRename = async (env, req) => !(await gate(env, 'ren:' + clientIp(req), '/hit', 10, 3600)).locked;
+ 
+ const isUnique = (e) => /UNIQUE/i.test(String(e && e.message) + String(e && e.cause));
+-const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase());
++const isReservedUsername = (username) => {
++  const n = String(username).toLowerCase().replace(/[._-]+/g, '');
++  return RESERVED_NAMES.has(n) || /^(admin|moderator|staff|official|gatsio)/.test(n);
++};
+ function isAllowedRoom(room, env) {
+   const value = String(room || '').toLowerCase();
+   if (!new RegExp(env.ROOM_REGEX || '^[a-z0-9.:-]{1,64}$').test(value)) return false;
+@@ -150,10 +140,12 @@ const logEvent = (env, uid, type, data, ip, at = Date.now()) =>
+ 
+ // ---------- handlers ----------
+ async function register(req, env) {
+-  if (!(await throttleRegister(env, req))) return json({ error: 'rate_limited' }, 429);
+   const b = await readBody(req);
+   if (!b || !USERNAME_RE.test(String(b.username || '')) || !KEY_RE.test(String(b.key || ''))) return json({ error: 'invalid_input' }, 400);
+   if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
++  const regIp = await ipHash(env, req);
++  const recent = await env.DB.prepare("SELECT COUNT(*) AS c FROM events WHERE type='register' AND ip_hash=?1 AND at>?2").bind(regIp, Date.now() - 3600_000).first();
++  if (recent && recent.c >= (Number(env.REGISTER_PER_IP_HOUR) || 5)) return json({ error: 'rate_limited' }, 429);
+   const uid = b64u.enc(crypto.getRandomValues(new Uint8Array(12)));
+   const lc = b.username.toLowerCase();
+   const hash = await pwHash(env, uid, b.key);
+@@ -172,21 +164,17 @@ async function register(req, env) {
+ }
+ 
+ async function login(req, env) {
++  const ipk = ipKey(req.headers.get('CF-Connecting-IP'));
+   const b = await readBody(req);
+   const lc = String((b && b.login) || '').toLowerCase();
+   if (!b || !USERNAME_RE.test(lc) || !KEY_RE.test(String(b.key || ''))) return json({ error: 'invalid_input' }, 400);
+-  // Failures only are counted: 20 per IP/64 and 10 per account per 15 min. No D1 writes, state survives eviction.
+-  const ipk = 'li:' + clientIp(req), lk = 'll:' + lc;
+-  const [gi, gl] = await Promise.all([gate(env, ipk, '/check', 20, 900), gate(env, lk, '/check', 10, 900)]);
+-  if (gi.locked || gl.locked) return json({ error: 'rate_limited' }, 429);
++  const gate = await gateCall(env, 'check', ipk, lc);
++  if (gate.locked) return json({ error: 'locked', retryAfter: gate.retryAfter }, 429);
+   const row = await env.DB.prepare('SELECT id,username,pw_hash,banned,ban_reason,token_version FROM users WHERE login=?1').bind(lc).first();
+   // Always do one HMAC verify so unknown users cost the same as wrong passwords.
+   const ok = row ? await pwVerify(env, row.id, b.key, row.pw_hash) : (await pwVerify(env, '0', b.key, DUMMY_HASH), false);
+-  if (!ok) {
+-    await Promise.all([gate(env, ipk, '/fail', 20, 900), gate(env, lk, '/fail', 10, 900)]);
+-    return json({ error: 'invalid_credentials' }, 401);
+-  }
+-  if (gl.n > 0) await gate(env, lk, '/ok', 10, 900);
++  if (!ok) { await gateCall(env, 'fail', ipk, lc); return json({ error: 'invalid_credentials' }, 401); }
++  if (gate.pairFails) await gateCall(env, 'ok', ipk, lc);
+   if (row.banned) return json({ error: 'banned', reason: row.ban_reason || null }, 403);
+   await logEvent(env, row.id, 'login', null, await ipHash(env, req)).run();
+   return json(await session(env, row));
+@@ -203,7 +191,6 @@ async function refresh(req, env) {
+ async function rename(req, env, ctx) {
+   const c = await authClaims(req, env);
+   if (!c) return json({ error: 'unauthorized' }, 401);
+-  if (!(await throttleRename(env, req))) return json({ error: 'rate_limited' }, 429);
+   const b = await readBody(req);
+   if (!b || !USERNAME_RE.test(String(b.username || ''))) return json({ error: 'invalid_input' }, 400);
+   if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
+diff --git a/src/gats-community/test/gate-core.test.mjs b/src/gats-community/test/gate-core.test.mjs
+new file mode 100644
+index 0000000..9954d05
+--- /dev/null
++++ b/src/gats-community/test/gate-core.test.mjs
+@@ -0,0 +1,72 @@
++import assert from 'node:assert/strict';
++import { GateCore, GATE, ipKey } from '../src/gate-core.js';
++
++const mkStore = () => { const m = new Map(); return { m, list: async () => [...m.entries()], put: async (k, v) => m.set(k, structuredClone(v)), delete: async (k) => m.delete(k) }; };
++const T0 = 1_000_000;
++let n = 0; const ok = (name) => console.log('ok', ++n, name);
++
++// IPv6 /64 normalisation
++assert.equal(ipKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), '2001:0db8:0001:0002::/64'); ok('ipv6 full -> /64');
++assert.equal(ipKey('2001:db8:1:2::9'), ipKey('2001:db8:1:2:ffff::1')); ok('same /64 collapses');
++assert.equal(ipKey('2001:db8::1'), '2001:0db8:0000:0000::/64'); ok(':: expansion');
++assert.equal(ipKey('203.0.113.9'), '203.0.113.9'); assert.equal(ipKey(null), 'unknown'); ok('ipv4 / unknown');
++
++// pair lock after 6 failures, not before; success never counts
++{
++  const g = new GateCore(mkStore());
++  for (let i = 0; i < 5; i++) await g.fail('1.1.1.1', 'bob', T0 + i);
++  assert.equal(g.check('1.1.1.1', 'bob', T0 + 10).locked, false); ok('5 fails: not locked');
++  await g.fail('1.1.1.1', 'bob', T0 + 11);
++  const c = g.check('1.1.1.1', 'bob', T0 + 12);
++  assert.equal(c.locked, true); assert.ok(c.retryAfter > 500 && c.retryAfter <= 600); ok('6th fail locks pair ~10 min');
++  assert.equal(g.check('9.9.9.9', 'bob', T0 + 12).locked, false); ok('victim NOT locked out for other IPs (griefing limited)');
++  assert.equal(g.check('1.1.1.1', 'alice', T0 + 12).locked, false); ok('same IP, other account unaffected');
++  assert.equal(g.check('1.1.1.1', 'bob', T0 + GATE.LOCK_MS + 20).locked, false); ok('lock expires');
++}
++// eviction: persisted counters survive a new instance
++{
++  const store = mkStore();
++  const a = new GateCore(store);
++  for (let i = 0; i < 6; i++) await a.fail('2.2.2.2', 'carol', T0 + i);
++  const b = new GateCore(store); await b.load(T0 + 100);   // simulates DO eviction + wake
++  assert.equal(b.check('2.2.2.2', 'carol', T0 + 100).locked, true); ok('lock survives eviction');
++  const s2 = mkStore(); const c1 = new GateCore(s2);
++  for (let i = 0; i < 4; i++) await c1.fail('3.3.3.3', 'dave', T0 + i);
++  const c2 = new GateCore(s2); await c2.load(T0 + 50);
++  await c2.fail('3.3.3.3', 'dave', T0 + 60); await c2.fail('3.3.3.3', 'dave', T0 + 61);
++  assert.equal(c2.check('3.3.3.3', 'dave', T0 + 62).locked, true); ok('pacing across evictions cannot reset counter (>=3 persisted)');
++}
++// ip-wide spraying across many accounts
++{
++  const g = new GateCore(mkStore());
++  for (let i = 0; i < 30; i++) await g.fail('4.4.4.4', 'user' + i, T0 + i);
++  assert.equal(g.check('4.4.4.4', 'fresh', T0 + 40).locked, true); ok('IP spraying across accounts locks the IP');
++}
++// success clears the pair counter; writes are bounded
++{
++  const st = mkStore(); const g = new GateCore(st);
++  for (let i = 0; i < 4; i++) await g.fail('5.5.5.5', 'erin', T0 + i);
++  await g.ok('5.5.5.5', 'erin');
++  assert.equal(g.check('5.5.5.5', 'erin', T0 + 10).pairFails, 0); ok('success clears pair counter');
++  let puts = 0; const st2 = mkStore(); const orig = st2.put; st2.put = async (...a) => { puts++; return orig(...a); };
++  const h = new GateCore(st2); let verified = 0;
++  for (let i = 0; i < 100; i++) {                       // real flow: a locked pair never reaches the password check
++    if (h.check('6.6.6.6', 'frank', T0 + i).locked) continue;
++    verified++; await h.fail('6.6.6.6', 'frank', T0 + i);
++  }
++  assert.equal(verified, 6); ok('attacker gets only 6 password checks per pair, not 100');
++  assert.ok(puts <= 8, 'puts=' + puts); ok('storage writes bounded (puts=' + puts + ')');
++  // worst case for broad scopes: one IP rotating through accounts until the IP lock trips
++  let puts2 = 0; const st3 = mkStore(); const o3 = st3.put; st3.put = async (...a) => { puts2++; return o3(...a); };
++  const w = new GateCore(st3);
++  for (let i = 0; i < 100; i++) { if (w.check('8.8.8.8', 'victim' + i, T0 + i).locked) continue; await w.fail('8.8.8.8', 'victim' + i, T0 + i); }
++  assert.ok(puts2 <= 20, 'puts2=' + puts2); ok('IP rotation across accounts: writes bounded (puts=' + puts2 + ')');
++}
++// expired entries are swept
++{
++  const st = mkStore(); const g = new GateCore(st);
++  for (let i = 0; i < 4; i++) await g.fail('7.7.7.7', 'gina', T0 + i);
++  await g.sweep(T0 + GATE.WINDOW_MS + 10);
++  assert.equal(st.m.size, 0); ok('sweep removes expired persisted entries');
++}
++console.log('ALL PASSED');
