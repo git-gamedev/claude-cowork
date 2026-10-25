@@ -1,0 +1,8 @@
+H1 PASS /refresh retained heap, two warm batches of 10k calls: batch1 25.3 KiB, batch2 -11.8 KiB (flat = no leak)
+H2 PASS 5 MB body and 6.5 MB chunked body: HTTP 400 / 400 (expect 4xx, no 500)
+H3 PASS Room.cache size after 3000 distinct users: size 256
+H4 PASS 300 sockets, 150 fresh-instance alarms: heap delta over last 130 sweeps 28.8 KiB, wrongly closed 0, 1.8 ms/sweep (Node, incl. SQLite shim)
+H5 PASS 20,000 failed logins from one IP: heap growth 378.1 KiB
+
+| id | how run | result |
+|---|---|---|
