@@ -7,7 +7,6 @@ import { Gate, ipKey } from './gate.js';
 export { Room, Gate };
 
 const enc = new TextEncoder();
-const dec = new TextDecoder();
 const TOKEN_TTL_S = 7 * 24 * 3600;
 const KDF = 'c-pbkdf2-600k+hmac-v1';
 const USERNAME_RE = /^[A-Za-z0-9_.-]{3,16}$/; // no commas/pipes: names are spliced into game frames
@@ -20,24 +19,26 @@ const RESERVED_NAMES = new Set([
 const RENAME_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // ---------- encoding / crypto helpers ----------
+const dec = new TextDecoder();
+const MAX_BODY = 2048;
+// base64url without per-byte string concatenation or chained regex copies.
+const B64_FIX = { '+': '-', '/': '_', '=': '' };
 const b64u = {
   enc(buf) {
     const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-    let s = '';
-    for (const x of b) s += String.fromCharCode(x);
-    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return btoa(String.fromCharCode.apply(null, b)).replace(/[+/=]/g, (c) => B64_FIX[c]); // inputs here are <= 256 bytes
   },
   dec(str) {
-    const s = atob(str.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (str.length % 4)) % 4));
-    const out = new Uint8Array(s.length);
-    for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+    const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/')); // atob accepts unpadded input
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < out.length; i++) out[i] = bin.charCodeAt(i);
     return out;
   },
 };
 
-// The Worker uses exactly two HMAC secrets (TOKEN_SECRET, PEPPER). A single slot thrashed between them
-// (2 importKey calls per /login and /register, measured), and a Map keyed by the secret retained the secret
-// text a second time. Two fixed slots: no growth, no re-imports. A third secret would evict round-robin.
+// The Worker uses exactly two HMAC secrets (TOKEN_SECRET, PEPPER). Two fixed slots: no growth, no re-imports
+// (a single slot thrashed between them on /login and /register; a Map would keep a second copy of each secret).
+// Idea and measurement: claude-1 / researcher-1 (#15). A third secret would evict round-robin.
 const slots = [{ s: null, p: null }, { s: null, p: null }];
 let nextSlot = 0;
 function hmacKey(secret) {
@@ -70,7 +71,7 @@ async function verifyToken(env, token) {
   }
 }
 
-async function pwData(uid, key) { return enc.encode(`pw1|${uid}|${key}`); }
+const pwData = (uid, key) => enc.encode(`pw1|${uid}|${key}`);
 async function pwHash(env, uid, key) {
   return b64u.enc(await crypto.subtle.sign('HMAC', await hmacKey(env.PEPPER), await pwData(uid, key)));
 }
@@ -99,12 +100,27 @@ async function safeEqual(env, a, b) {
 }
 
 // ---------- http helpers ----------
-const json = (data, status = 200) =>
-  new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+const JSON_HEADERS = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }; // init object reused, never mutated
+const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
 
+// Reads at most MAX_BODY bytes into one fixed buffer; oversize or chunked-flood bodies are cancelled, not buffered.
 async function readBody(req) {
-  if (Number(req.headers.get('content-length') || 0) > 2048) return null;
-  try { return await req.json(); } catch { return null; }
+  if (Number(req.headers.get('content-length') || 0) > MAX_BODY || !req.body) return null;
+  const reader = req.body.getReader();
+  const buf = new Uint8Array(MAX_BODY);
+  let n = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (n + value.length > MAX_BODY) { reader.cancel().catch(() => {}); return null; }
+      buf.set(value, n);
+      n += value.length;
+    }
+    return JSON.parse(dec.decode(buf.subarray(0, n)));
+  } catch {
+    return null;
+  }
 }
 
 async function authClaims(req, env) {
@@ -139,19 +155,22 @@ const throttleRename = async (env, req) => !(await gate(env, 'ren:' + clientIp(r
 
 const isUnique = (e) => /UNIQUE/i.test(String(e && e.message) + String(e && e.cause));
 const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase());
-// Compile the room regex once per isolate instead of once per call (the env value never changes at runtime).
-let roomReSrc, roomReVal;
-function roomRe(src) {
-  src = src || '^[a-z0-9.:-]{1,64}$';
-  if (src !== roomReSrc) { roomReSrc = src; roomReVal = new RegExp(src); }
-  return roomReVal;
-}
+// Compiled once per distinct config value, not per request.
+let roomRules = null;
 function isAllowedRoom(room, env) {
   const value = String(room || '').toLowerCase();
-  if (!roomRe(env.ROOM_REGEX).test(value)) return false;
-  const host = value.split(':')[0];
+  const re = env.ROOM_REGEX || '^[a-z0-9.:-]{1,64}$';
   const suffix = String(env.ALLOWED_ROOM_SUFFIX || 'gats.io').toLowerCase();
+  if (!roomRules || roomRules.re !== re || roomRules.suffix !== suffix) roomRules = { re, suffix, rx: new RegExp(re) };
+  if (!roomRules.rx.test(value)) return false;
+  const host = value.split(':')[0];
   return !!suffix && (host === suffix || host.endsWith('.' + suffix));
+}
+let originRules = null;
+function originAllowed(origin, env) {
+  const raw = env.ALLOWED_ORIGINS || 'https://gats.io,https://www.gats.io';
+  if (!originRules || originRules.raw !== raw) originRules = { raw, set: new Set(raw.split(',').map((x) => x.trim())) };
+  return originRules.set.has(origin);
 }
 
 async function session(env, user) {
@@ -258,18 +277,10 @@ async function rename(req, env, ctx) {
   return json(await session(env, { id: c.uid, username: b.username, token_version: c.tv }));
 }
 
-// Parsed once per isolate: the allowed-origin list never changes at runtime.
-let originsSrc, originsVal;
-function originList(src) {
-  src = src || 'https://gats.io,https://www.gats.io';
-  if (src !== originsSrc) { originsSrc = src; originsVal = src.split(',').map((x) => x.trim()); }
-  return originsVal;
-}
-
 async function presence(req, env) {
   if (req.headers.get('Upgrade') !== 'websocket') return json({ error: 'expected_websocket' }, 426);
   const origin = req.headers.get('Origin');
-  if (origin && !originList(env.ALLOWED_ORIGINS).includes(origin)) return json({ error: 'forbidden_origin' }, 403);
+  if (origin && !originAllowed(origin, env)) return json({ error: 'forbidden_origin' }, 403);
 
   // Token travels in Sec-WebSocket-Protocol so it never appears in a URL or access log.
   const protos = (req.headers.get('Sec-WebSocket-Protocol') || '').split(',').map((s) => s.trim());

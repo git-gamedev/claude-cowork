@@ -26,6 +26,9 @@ export function ipKey(ip) {
   return full.slice(0, 4).map((x) => x.replace(/^0+(?=.)/, '')).join(':') + '::/64';
 }
 
+const GATE_HEADERS = { 'content-type': 'application/json' };
+const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: GATE_HEADERS });
+
 export class Gate extends DurableObject {
   async load() {
     if (this.rec === undefined) this.rec = (await this.ctx.storage.get('r')) || null;
@@ -39,7 +42,6 @@ export class Gate extends DurableObject {
     const win = (Number(u.searchParams.get('win')) || 900) * 1000;
     let rec = await this.load();
     const n = rec ? rec.n : 0;
-    const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
     switch (u.pathname) {
       case '/check':

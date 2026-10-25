@@ -1,1 +1,1 @@
-{ "name": "gats-community", "private": true, "type": "module", "scripts": { "test": "node --no-warnings --import ./tests/register.mjs --test tests/gate.test.mjs tests/worker.e2e.test.mjs tests/room.test.mjs" } }
+{ "name": "gats-community", "private": true, "type": "module", "scripts": { "test": "node --no-warnings --import ./tests/register.mjs --test tests/gate.test.mjs tests/worker.e2e.test.mjs tests/room.test.mjs tests/optimize.test.mjs" } }
