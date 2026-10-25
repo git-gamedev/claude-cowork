@@ -1,0 +1,8 @@
+A: 100 players x 2 logins    worker     312 (0%)  DO req     820 (1%)  D1 rows    1260 (1%)  DO rows     828 (1%)
+A: 300 players x 3 logins    worker    1236 (1%)  DO req    3360 (3%)  D1 rows    4680 (5%)  DO rows    3084 (3%)
+A: 1000 players x 3 logins   worker    4120 (4%)  DO req   11200 (11%)  D1 rows   15600 (16%)  DO rows   10280 (10%)
+B: 5000 spray, unknown names worker    5000 (5%)  DO req    9000 (9%)  D1 rows       0 (0%)  DO rows    8000 (8%)
+   rate_limited responses: 1000
+C: 2000 guesses at 1 account worker    2001 (2%)  DO req    4022 (4%)  D1 rows       6 (0%)  DO rows      44 (0%)
+   rate_limited: 1990; D1 rows written during attack: 0
+   legit owner from another IP right after: HTTP 429 rate_limited
