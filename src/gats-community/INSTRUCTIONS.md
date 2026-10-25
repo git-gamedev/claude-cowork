@@ -154,3 +154,5 @@ Avoid putting your admin key in shell history or a shared terminal transcript.
 Known limits: someone can still lock a specific account for up to 15 minutes by failing 10 logins (the price of a per-account limit); an attacker with many separate IPv6 /64s or IPv4 addresses can spread attempts, and the PBKDF2 cost plus the server-side HMAC is the real defence. Gate fails open if a Gate DO errors, so an outage there cannot lock out all players. Raise `MAX_REG_PER_DAY` in `wrangler.toml` for a launch day.
 
 Run the local tests with `node --test tests/gate.test.mjs` (Node 20+).
+
+Successful logins: the first 20 per account per hour are written to the `events` log; further ones still succeed but are not logged (keeps the D1 write quota safe). Room sweeps (stale sockets, bans, logout-everywhere) run every 5 minutes while anyone is connected, so a ban reaches a live player within about 5 minutes unless you pass `rooms` to `/admin/ban` for an instant kick.

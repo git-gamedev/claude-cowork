@@ -6,7 +6,7 @@
 import { DurableObject } from 'cloudflare:workers';
 
 const TIMEOUT_MS = 90_000;   // drop sockets silent for this long
-const ALARM_MS = 60_000;     // sweep interval while anyone is connected
+const ALARM_MS = 300_000;    // sweep interval while anyone is connected (5 min: keeps DO requests inside the free cap)
 const CACHE_TTL = 300_000;
 const PID_RE = /^[A-Za-z0-9_-]{1,12}$/;
 
