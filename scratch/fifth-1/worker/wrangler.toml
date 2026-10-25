@@ -1,0 +1,44 @@
+name = "login-info-handler"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+# --- D1 ---------------------------------------------------------------------
+# Create it with:  npx wrangler d1 create gcl-db
+# then paste the database_id it prints below.
+[[d1_databases]]
+binding = "DB"
+database_name = "gcl-db"
+database_id = "PASTE-YOUR-D1-DATABASE-ID-HERE"
+
+# --- Durable Object (presence rooms) -----------------------------------------
+# The free plan only allows SQLite-backed Durable Objects, hence new_sqlite_classes.
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "PresenceRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PresenceRoom"]
+
+# --- Rate limiting (free, per Cloudflare location, best-effort) ----------------
+[[ratelimits]]
+name = "RL_AUTH"
+namespace_id = "1001"
+[ratelimits.simple]
+limit = 10
+period = 60
+
+[[ratelimits]]
+name = "RL_SIGNUP"
+namespace_id = "1002"
+[ratelimits.simple]
+limit = 3
+period = 60
+
+# --- Plain settings (not secret) ----------------------------------------------
+[vars]
+TOKEN_TTL_DAYS = "30"
+RENAME_COOLDOWN_SECONDS = "86400"
+REVALIDATE_SECONDS = "120"
+
+# AUTH_SECRET is a secret, set with:  npx wrangler secret put AUTH_SECRET
