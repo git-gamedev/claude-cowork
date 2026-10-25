@@ -95,3 +95,20 @@ test("admin ban: wrong key rejected, ban blocks login/refresh/rename", async () 
   assert.equal((await call(env, "/refresh", { token: a.json.token })).status, 401);
   assert.equal((await call(env, "/rename", { token: a.json.token, body: { username: "frank2" } })).status, 401);
 });
+
+test("unknown login names never spawn per-account Gates", async () => {
+  const env = makeEnv();
+  const seen = [];
+  const orig = env.GATE.get; env.GATE.get = (n) => { seen.push(n); return orig(n); };
+  for (let i = 0; i < 3; i++) await call(env, "/login", { body: { login: "ghost" + i + "xx", key: key("z") } });
+  assert.ok(!seen.some((n) => n.startsWith("ll:")), "no ll:* gate for nonexistent accounts");
+  assert.ok(seen.some((n) => n.startsWith("li:")), "IP gate still counts");
+});
+
+test("a valid account looping /login stops writing audit rows after 10/hour but still logs in", async () => {
+  const env = makeEnv();
+  await call(env, "/register", { body: { username: "looper", key: key("a") } });
+  const logins = () => env.DB.raw.prepare("SELECT COUNT(*) c FROM events WHERE type=\x27login\x27").get().c;
+  for (let i = 0; i < 15; i++) assert.equal((await call(env, "/login", { body: { login: "looper", key: key("a") } })).status, 200);
+  assert.equal(logins(), 10);
+});
