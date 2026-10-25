@@ -25,5 +25,3 @@ What lives where
 * Hot and constantly changing: who's online, last-seen, in DO memory.
 * Per-user and private: the token and preferences, in the userscript.
 * Secrets: the HMAC key, in the worker's secrets, never in client code.
-
-One open question is how users authenticate to `/login`. If it's a password, hashing it in a Worker can run into the free plan's CPU-per-request cap, so test it early. If it's Discord or another OAuth sign-in, you can skip storing credentials entirely. Which are you planning?
