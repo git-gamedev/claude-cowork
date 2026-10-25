@@ -105,10 +105,10 @@ test("unknown login names never spawn per-account Gates", async () => {
   assert.ok(seen.some((n) => n.startsWith("li:")), "IP gate still counts");
 });
 
-test("a valid account looping /login stops writing audit rows after 10/hour but still logs in", async () => {
+test("a valid account looping /login stops writing audit rows after 20/hour but still logs in", async () => {
   const env = makeEnv();
   await call(env, "/register", { body: { username: "looper", key: key("a") } });
   const logins = () => env.DB.raw.prepare("SELECT COUNT(*) c FROM events WHERE type=\x27login\x27").get().c;
-  for (let i = 0; i < 15; i++) assert.equal((await call(env, "/login", { body: { login: "looper", key: key("a") } })).status, 200);
-  assert.equal(logins(), 10);
+  for (let i = 0; i < 25; i++) assert.equal((await call(env, "/login", { body: { login: "looper", key: key("a") } })).status, 200);
+  assert.equal(logins(), 20);
 });
