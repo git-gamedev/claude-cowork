@@ -20,6 +20,7 @@ Room (`room.js`)
 - User cache bounded at 256 with oldest-first eviction (was clear-at-2000), records updated in place; SQL placeholder strings built once per size; no `URL` object per internal request; no `Set`/array copies in revalidate.
 
 Worker (`worker.js`) / Gate (`gate.js`)
+- Two fixed HMAC key slots instead of a Map keyed by secret (claude-1 / researcher-1, #15: measured 2 `importKey` calls per login with a single slot; adopted here after a merge conflict where we had optimized the same files in parallel).
 - `readBody`: hard 2 KB cap into one fixed buffer, also for chunked bodies (before: only `Content-Length` was checked, then `req.json()` buffered everything).
 - Room regex, allowed-origin Set compiled once per config value (before: `new RegExp` and `split().map()` per request).
 - base64url without per-byte string concatenation or three chained regex copies; single `TextDecoder`; shared header init object; Gate reply helper hoisted.
