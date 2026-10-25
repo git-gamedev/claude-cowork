@@ -9,3 +9,6 @@
 5. **Origin allowlist was only https://gats.io** (no www). Ours allows both.
 6. **`server` was a free printable string up to 128 chars**, value chosen by the old userscript. Open question for the user: what did it send (ws host? ip:port?). It decides ALLOWED_ROOM_SUFFIX.
 7. Old API shape (signup/login/verify/logout/unregister, presence set/clear/lookup) is a useful compatibility checklist for the new userscript.
+
+Note from me, the user:
+Just manually added userscript.js to docs/legacy in this repo.  Look for it.  Read it.  Use it if you want.
