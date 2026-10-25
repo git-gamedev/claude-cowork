@@ -62,3 +62,54 @@ Mark these with label `testing`; they cannot be closed from a sandbox.
 - You do not need to re-derive anything: this file, STATE.md, `docs/CLEANUP.md` and the issue list are the full context.
 - Safe cleanup: verify and close duplicates (#17/#22, #18-#23 overlaps) only with evidence; update STATE.md; keep `testing` issues open; do not delete files under `docs/` or `scratch/` (they are evidence); do not edit `src/` without running `npm test`; do not touch donor trees.
 - If something here contradicts the code at HEAD, trust the code and fix this file.
+
+
+---
+
+## ADDENDUM — issue reset and post-round truth (2026-10-25 04:15 UTC)
+
+This addendum is appended after the next Claude round. The earlier checkpoint text above is historical context; where it differs from this addendum or the current code/tests, use the newer facts below. No source/code files were changed during this reset.
+
+### Current checkpoint and evidence
+- Main HEAD at reset: `4d455584f7a792ae6956feef4944731eb023fb59`.
+- Canonical source remains `src/gats-community/`. Donors: `src/gats-login/`, `src/gcl-worker/`.
+- Local Node suite reported `cd src/gats-community && npm test`: **27/27 pass** at the current handoff checkpoint. Recorded userscript replay reports **9/9 pass**; replay notes are in `docs/test-results/claude-1.md`. Resource/heap tests are Node harnesses, not actual workerd.
+- Optimization report: `docs/optimization-sonnet-1.md`. For the fake 150-socket workload, attachment clones fell 68,250 -> 150, time ~105 ms -> ~9 ms, GC events 600 -> 36; base64url 800k calls 847 ms -> 215 ms. These are Node measurements; no stable MB heap saving is claimed.
+- Fifth-1's **22/22 workerd smoke checks were on an earlier SHA (`2b06f5b`)**, not current optimized HEAD. Current-HEAD workerd has not been re-run. No real Cloudflare deployment, real browser/Tampermonkey session, or live-game test has happened.
+- Room alarm interval is **300,000 ms / 5 minutes**, about **288 alarms per active room per day**, not the earlier 60-second / 1,440 figure. Cost math is in `docs/cost-estimate.md`.
+- `src/gats-community/INSTRUCTIONS.md` was checked/fixed at `4d455584` for registration cap, 300-second alarm, deploy-replaces-existing-worker warning, Node 20.6+ / npm test info, and presence troubleshooting. #26's work is recorded in the archived issue.
+
+### Important residual security findings — do not mark complete
+1. `gate.js` uses persisted counters, IPv6 /64 normalization, failure-only accounting, per-IP/per-account limits, per-IP register/rename limits and `MAX_REG_PER_DAY=300`. Failed password attempts write zero D1 rows; random unknown usernames do not create account Gates. However:
+   - Critic's round-3 **check-then-fail TOCTOU** model allowed 200 concurrent guesses past a limit of 10. This is a model reproduction, not yet a real-DO reproduction.
+   - Quota simulation confirmed **account lockout griefing**: after 2,000 failures from one IP, the account owner logging in from a different IP was rate-limited for 15 minutes.
+   - Gate is documented as fail-open if its storage/quota path fails. See `docs/review-claude-sonnet-round3.md` and `docs/test-report-researcher-1.md`.
+2. **Reserved-name normalization still needs verification/fix.** Current worker helper checks exact lowercase membership in the reserved set; usernames permit dots, underscores, hyphens. Critic reported variants like `admin.` and `ad-min` could bypass exact matching. An attempted normalizing patch was withdrawn; do not treat this item as resolved merely because the set/cooldown exists.
+3. The 5-minute alarm reduces budget use but ban/revocation enforcement from an unnamed room can lag by up to a sweep; current-HEAD workerd hibernation/revocation timing still needs a run.
+4. Presence name matching (`gname` must equal the game's d-frame username) is only a spoofing mitigation, not cryptographic identity.
+
+### User-dependent deployment / missing artifacts
+Before any production claim: user must confirm real game WebSocket hostnames (currently `ALLOWED_ROOM_SUFFIX="gats.io"` is a guess), fill the D1 `database_id`, set Worker secrets `TOKEN_SECRET`, `PEPPER`, `ADMIN_KEY`, back up the deployed old KV Worker because `wrangler deploy` replaces the existing `login-info-handler`, and apply `src/gats-community/schema_002.sql` once after the base schema. User should rotate the relay GitHub tokens previously exposed in the original relay instructions; do not copy them into repository/docs/issues.
+
+Legacy sources actually present: `docs/legacy/index.js` + README (old KV Worker), `docs/reference/gats-protocol-reference.md`, `docs/reference/userscript-skeleton.user.js`, `docs/gats-protocol.md`, `docs/skeleton.user.js`, `docs/design-doc.md`, and `docs/legacy-v1.8-digest.md`. The older GitGamedev project restarted after the DDoS and the complete v1.8 userscript are **not** present in this repo; the digest is not the full script. Ask the user to re-upload/link those files if still required. Never invent lessons from missing content.
+
+### Issue reset completed
+All previously open issues #1, #4, #5, #8, #9, #10, #12, #17, #19, #20, #21, #22, #23, #25 were closed with reason `duplicate` as administrative supersessions and a comment pointing to their replacements. The replacement issues are open and contain the unchanged original description plus a compressed work record:
+- #27 replaces Mission #1 — mission plus global status and remaining real-run requirements.
+- #28 replaces security review #4.
+- #29 replaces userscript review #5.
+- #30 replaces hibernation/revalidation bug #8.
+- #31 replaces Gate/throttle issue #9 (TOCTOU + lockout grief remain).
+- #32 replaces rename/signup/reserved-name issue #10 (normalization bypass remains suspect).
+- #33 replaces phantom-player issue #12.
+- #34 replaces memory-optimization issue #17.
+- #35 replaces missing-files chat #19.
+- #36 replaces legacy-project request #20.
+- #37 replaces tester pass #21.
+- #38 replaces memory-optimization duplicate #22.
+- #39 replaces tester-pass duplicate #23.
+- #40 replaces cleanup claim/help log #25.
+Use #27 as the mission tracker and #40 for one-line CLAIM/DONE/RELEASE/HELP/JOINING status. The paired duplicates (#34/#38 and #37/#39) are preserved because this reset deliberately made one replacement per old open issue; avoid duplicating actual work.
+
+### Issue deletion limitation
+This GitHub connection exposes issue creation, comments, and close/update operations but no permanent issue-delete operation; GitHub issues cannot be individually deleted through the supported issue API. Therefore **closed issues have not been and cannot be permanently deleted from this integration**. They remain as archived history. Do not claim otherwise.
