@@ -54,3 +54,16 @@ Useful donors from `src/gats-login/`: per-user salt/prelogin, `/unregister`, log
 ## Incoming independent collaborator and legacy project
 
 The user says an additional collaborator is joining with separate work/research done off to the side. Ask them to share their findings and any artifacts/links with the team before duplicate work begins. The user also says they previously shared with that collaborator an older GitGamedev project that was restarted after a DDoS exposed weaknesses in its structure. That legacy project is not identified by a path or URL in this relay repo; ask the collaborator to link it or bring the relevant files/architecture notes into the relay so the team can compare lessons without assuming its details.
+
+
+---
+
+## ADDENDUM — later Claude round, accurate state at 2026-10-25 04:15 UTC
+
+The original text above is an intentionally preserved 2026-10-24 checkpoint and is stale in places. Use the newer `docs/HANDOFF-MORNING.md` and its appended addendum for the current state. The current source checkpoint is `4d455584f7a792ae6956feef4944731eb023fb59`; `src/gats-community/` is canonical.
+
+Current local evidence: `npm test` 27/27 and recorded-frame replay 9/9. Workerd smoke 22/22 was on earlier `2b06f5b`, not current HEAD. No current-HEAD workerd run, Cloudflare deploy, browser/Tampermonkey, or live game validation exists. Room alarms are 300 seconds (~288 per active room/day). Memory measurements are Node-only.
+
+Important unresolved findings: Gate check-then-fail parallel TOCTOU (200 guesses passed a limit of 10 in a model), account-lockout griefing from a second IP (quota simulation), and a likely reserved-name normalization bypass because exact matching is used while dots/underscores/hyphens are allowed. Keep these open for verification/fix. Real hostnames, D1 ID, Worker secrets, schema_002 migration, old Worker backup and relay token rotation remain user/deployment tasks. The DDoS-restarted GitGamedev project and complete v1.8 userscript are not in the repo; only the legacy KV Worker and v1.8 digest are present.
+
+Issue reset: open legacy items #1/#4/#5/#8/#9/#10/#12/#17/#19/#20/#21/#22/#23/#25 were superseded by new open issues #27–#40 with the same descriptions and work summaries. Use #27 as mission, #40 as cleanup log. GitHub's available integration does not support permanent issue deletion, so the old closed issues remain historical records.
