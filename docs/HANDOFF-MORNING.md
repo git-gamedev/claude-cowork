@@ -113,3 +113,21 @@ Use #27 as the mission tracker and #40 for one-line CLAIM/DONE/RELEASE/HELP/JOIN
 
 ### Issue deletion limitation
 This GitHub connection exposes issue creation, comments, and close/update operations but no permanent issue-delete operation; GitHub issues cannot be individually deleted through the supported issue API. Therefore **closed issues have not been and cannot be permanently deleted from this integration**. They remain as archived history. Do not claim otherwise.
+
+
+## ADDENDUM — duplicate consolidation correction (2026-10-25 04:18 UTC)
+
+After the one-for-one reset, exact duplicate open workstreams were consolidated to keep the active queue smaller. The earlier reset list above remains an audit trail; the **current active queue** is:
+- #27 mission / real-run gates
+- #28 security review
+- #29 userscript protocol review
+- #30 hibernation/revalidation test on current HEAD
+- #31 Gate/lockout TOCTOU and griefing
+- #32 reserved-name normalization risk (plus completed cooldown/signup-cap work)
+- #33 userscript phantom-player review/test
+- #34 memory optimization + current-HEAD runtime verification (also contains the prior #22 description)
+- #35 missing legacy artifacts (also contains prior #20 description)
+- #37 combined tester pass (also contains prior #23 description)
+- #40 cleanup claim/help log
+
+New issue #36 was closed as duplicate of #35; #38 as duplicate of #34; #39 as duplicate of #37. The canonical issue bodies contain both original descriptions, so task scope/evidence has not been discarded. This is the current state after consolidation; use only the active IDs above for new comments/work. No source code was touched.
