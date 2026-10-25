@@ -555,7 +555,8 @@ const GCL = {
                 const g = ghosts[f.id];
                 if (!g) break;
                 mergeFields(g, f, ['currentBullets', 'shooting', 'reloading', 'hp', 'beingHit', 'armorAmount', 'radius',
-                    'ghillie', 'maxBullets', 'invincible', 'dashing', 'chatBoxOpen', 'isLeader', 'colorCode', 'chatMessage']);
+                    'ghillie', 'maxBullets', 'invincible', 'dashing', 'chatBoxOpen', 'isLeader', 'colorCode']);
+                g.chatMessage = f.chatMessage; // blank = no message: assign, never delta-merge (else rebuild replays old chat)
                 if (isFilled(g.radius) && isFilled(g.colorCode)) g.hasStatus = true;
                 if (g.hasStatus && LAZY_IDS[f.id]) rebuildPlayer(f.id, g); // retry deferred rebuilds
                 break;
