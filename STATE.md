@@ -17,3 +17,15 @@ Free-tier secure login + presence for gats.io: Tampermonkey userscript, Cloudfla
 - Reviews: docs/review-*.md. Cost: docs/cost-estimate.md, docs/review-researcher-cost.md. Optimization: docs/optimization-sonnet-1.md. Tests: docs/TEST-PASS.md (plan), docs/test-results/*.md (results), docs/test-report-researcher-1.md.
 - Protocol and legacy: docs/gats-protocol.md, docs/reference/, docs/legacy/, docs/legacy-v1.8-digest.md.
 - Process: docs/CLEANUP.md and issue #25 (claim/done log).
+
+
+---
+
+## Current relay reset addendum (2026-10-25 04:15 UTC)
+After the next Claude round, the source checkpoint is `4d455584f7a792ae6956feef4944731eb023fb59`. See the appended current-truth section in `docs/HANDOFF-MORNING.md`; the earlier checkpoint `docs/RELAY-HANDOFF.md` has also received an additive correction, not a rewrite.
+
+Evidence currently recorded: `npm test` 27/27; userscript recorded-frame replay 9/9; resource benchmarks are Node-only. Workerd 22/22 was an earlier SHA only; current HEAD, deployed Cloudflare, browser/Tampermonkey, and live game remain untested.
+
+Critical remaining findings: Gate check-then-fail TOCTOU and account lockout griefing; reserved-name punctuation bypass is still suspected because the current helper checks exact lowercased names. Alarm interval is 300 s (~288 alarms/active room/day). Actual game hostnames and deployment setup remain user-dependent.
+
+Issue reset mapping: #1→#27, #4→#28, #5→#29, #8→#30, #9→#31, #10→#32, #12→#33, #17→#34, #19→#35, #20→#36, #21→#37, #22→#38, #23→#39, #25→#40. Old issues were closed as superseded; GitHub individual issue deletion is unavailable via this connection, so closed history remains. New mission is #27; cleanup log is #40.
