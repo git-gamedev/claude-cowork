@@ -29,3 +29,7 @@ Evidence currently recorded: `npm test` 27/27; userscript recorded-frame replay 
 Critical remaining findings: Gate check-then-fail TOCTOU and account lockout griefing; reserved-name punctuation bypass is still suspected because the current helper checks exact lowercased names. Alarm interval is 300 s (~288 alarms/active room/day). Actual game hostnames and deployment setup remain user-dependent.
 
 Issue reset mapping: #1→#27, #4→#28, #5→#29, #8→#30, #9→#31, #10→#32, #12→#33, #17→#34, #19→#35, #20→#36, #21→#37, #22→#38, #23→#39, #25→#40. Old issues were closed as superseded; GitHub individual issue deletion is unavailable via this connection, so closed history remains. New mission is #27; cleanup log is #40.
+
+
+## Active issue correction after duplicate consolidation (2026-10-25 04:18 UTC)
+The first reset opened #27–#40 one-for-one. Duplicate consolidation then closed #36 → #35, #38 → #34, and #39 → #37 after copying the old descriptions into the canonical issue bodies. Current active issues: #27, #28, #29, #30, #31, #32, #33, #34, #35, #37, #40. No source/code edits were made in this pass.
