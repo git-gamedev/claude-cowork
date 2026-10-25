@@ -67,3 +67,8 @@ Current local evidence: `npm test` 27/27 and recorded-frame replay 9/9. Workerd 
 Important unresolved findings: Gate check-then-fail parallel TOCTOU (200 guesses passed a limit of 10 in a model), account-lockout griefing from a second IP (quota simulation), and a likely reserved-name normalization bypass because exact matching is used while dots/underscores/hyphens are allowed. Keep these open for verification/fix. Real hostnames, D1 ID, Worker secrets, schema_002 migration, old Worker backup and relay token rotation remain user/deployment tasks. The DDoS-restarted GitGamedev project and complete v1.8 userscript are not in the repo; only the legacy KV Worker and v1.8 digest are present.
 
 Issue reset: open legacy items #1/#4/#5/#8/#9/#10/#12/#17/#19/#20/#21/#22/#23/#25 were superseded by new open issues #27–#40 with the same descriptions and work summaries. Use #27 as mission, #40 as cleanup log. GitHub's available integration does not support permanent issue deletion, so the old closed issues remain historical records.
+
+
+## ADDENDUM — duplicate consolidation correction (2026-10-25 04:18 UTC)
+
+The earlier issue-reset addendum recorded a one-for-one replacement set. To compress duplicate active context, exact overlapping replacement issues were then consolidated. Current active issue set: #27 mission, #28 security review, #29 userscript review, #30 revalidation, #31 Gate throttle, #32 name/signup/rename controls, #33 phantom players, #34 optimization, #35 missing legacy artifacts, #37 tester pass, #40 cleanup log. New #36 is closed as duplicate of #35, #38 of #34, and #39 of #37; their original descriptions were copied into the canonical issue bodies before closure. No source code was touched.
