@@ -6,7 +6,7 @@ This guide matches the **canonical implementation in this directory** (`src/gats
 
 - `gats-community.user.js`: Tampermonkey account UI and the client-side game protocol hook.
 - `src/worker.js`: Cloudflare Worker routes for register, login, refresh, rename, presence and admin ban/unban.
-- `src/room.js`: SQLite-backed Durable Objects for room presence and the Gate throttle.
+- `src/room.js`: SQLite-backed Durable Object for room presence. `src/gate.js`: Gate Durable Object for rate limiting (see the last section).
 - `schema.sql`: initial D1 database tables.
 - `schema_002.sql`: additive migration for `renamed_at`, used by the 24-hour rename cooldown.
 - `wrangler.toml`: Worker name, binding configuration and environment variables.
@@ -119,7 +119,7 @@ Avoid putting your admin key in shell history or a shared terminal transcript.
 
 ## Security, quota and operational caveats
 
-- The Gate still uses per-IP in-memory sliding-window state. A Durable Object eviction can reset it; shared IP users may affect one another; IPv6 address rotation can bypass an exact-IP key; successful requests currently consume the window; and it is not an account-level brute-force defense. Issues #7 and #9 remain open.
+- Rate limiting is best-effort: see "Rate limiting and signup cap (Gate)" for the limits and residual risks (single-account lockout, many-address spraying). Nothing here has been run against a live Cloudflare account or the live game yet.
 - A configurable daily registration cap is not yet implemented. D1 quota exhaustion can interrupt signup/login/rename until quotas reset, so do not expose this as production-hardened while #7/#9/#10 remain under review.
 - Rename now has a 24-hour cooldown. The first rename after migration is allowed because existing rows get `renamed_at = 0`. Reserved display names are rejected.
 - Room revalidation now runs on each alarm while a room has active sockets to fix a hibernation bug. At a 60-second alarm interval, that is approximately 1,440 alarms per active room per day plus batched D1 reads. Track actual room counts and Cloudflare usage; this tradeoff needs review against the free-tier budget.
