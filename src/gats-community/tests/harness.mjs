@@ -4,12 +4,13 @@ import { readFileSync } from "node:fs";
 import worker from "../src/worker.js";
 import { Room } from "../src/room.js";
 import { Gate } from "../src/gate.js";
+import { Verifier } from "../src/verifier.js";
 
 const here = new URL("../", import.meta.url);
 
-export function makeDB() {
+export function makeDB(files = ["schema.sql", "schema_002.sql", "schema_003.sql"]) {
   const db = new DatabaseSync(":memory:");
-  for (const f of ["schema.sql", "schema_002.sql"]) db.exec(readFileSync(new URL(f, here), "utf8"));
+  for (const f of files) db.exec(readFileSync(new URL(f, here), "utf8"));
   const stmt = (sql, args = []) => ({
     bind: (...a) => stmt(sql, a),
     _run: () => db.prepare(sql).run(...args),
@@ -34,7 +35,7 @@ export function fakeStorage() {
 }
 
 export function makeEnv(extra = {}) {
-  const gates = new Map(), storages = new Map();
+  const gates = new Map(), storages = new Map(), verifiers = new Map(), vstorages = new Map();
   const env = {
     DB: makeDB(), TOKEN_SECRET: "t".repeat(40), PEPPER: "p".repeat(40), ADMIN_KEY: "adminkey",
     ALLOWED_ROOM_SUFFIX: "gats.io", ROOM_SUFFIX: "gats.io",
@@ -42,6 +43,10 @@ export function makeEnv(extra = {}) {
       idFromName: (n) => n,
       get: (n) => ({ fetch: (url) => { if (!gates.has(n)) { if (!storages.has(n)) storages.set(n, fakeStorage()); gates.set(n, new Gate({ storage: storages.get(n) }, env)); } return gates.get(n).fetch(new Request(url)); } }),
       evict: (n) => gates.delete(n), // simulate the runtime evicting an idle object (storage survives)
+    },
+    VERIFIER: {
+      idFromName: (n) => n,
+      get: (n) => ({ fetch: (url) => { if (!verifiers.has(n)) { if (!vstorages.has(n)) vstorages.set(n, fakeStorage()); verifiers.set(n, new Verifier({ storage: vstorages.get(n) }, env)); } return verifiers.get(n).fetch(new Request(url)); } }),
     },
     ROOMS: { idFromName: (n) => n, get: () => ({ fetch: async () => new Response("ok") }) },
     ...extra,

@@ -4,7 +4,8 @@
 
 import { Room } from './room.js';
 import { Gate, ipKey } from './gate.js';
-export { Room, Gate };
+import { Verifier } from './verifier.js';
+export { Room, Gate, Verifier };
 
 const enc = new TextEncoder();
 const TOKEN_TTL_S = 7 * 24 * 3600;
@@ -57,7 +58,7 @@ async function signToken(env, claims) {
   return `v1.${payload}.${b64u.enc(sig)}`;
 }
 
-async function verifyToken(env, token) {
+async function verifyToken(env, token, typ) {
   try {
     const [v, payload, sig] = String(token).split('.');
     if (v !== 'v1' || !payload || !sig) return null;
@@ -65,6 +66,7 @@ async function verifyToken(env, token) {
     if (!ok) return null;
     const claims = JSON.parse(dec.decode(b64u.dec(payload)));
     if (!claims.exp || claims.exp * 1000 < Date.now()) return null;
+    if ((claims.typ || '') !== (typ || '')) return null; // login tickets (typ vt) can never be used as session tokens
     return claims;
   } catch {
     return null;
@@ -193,27 +195,113 @@ async function session(env, user) {
 const logEvent = (env, uid, type, data, ip, at = Date.now()) =>
   env.DB.prepare('INSERT INTO events (user_id,type,data,ip_hash,at) VALUES (?1,?2,?3,?4,?5)').bind(uid, type, data ? JSON.stringify(data) : null, ip, at);
 
+
+// ---------- email verification (EMAIL_VERIFY=on; docs/design-email-verification.md) ----------
+const EMAIL_RE = /^[^\s@,;<>()"'\\]{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,24}$/i;
+const DEV_RE = /^[A-Za-z0-9_-]{22,43}$/;
+const TICKET_TTL_S = 600;
+const VB_LIMIT = 10, VB_WIN_S = 3600; // wrong codes per IP/64 per hour before that IP is banned until the window ends
+const USER_COLS = 'id,username,pw_hash,banned,ban_reason,token_version';
+const USER_COLS_EMAIL = USER_COLS + ',email,email_verified_at';
+const emailOn = (env) => env.EMAIL_VERIFY === 'on';
+const normEmail = (e) => { const x = String(e || '').trim().toLowerCase(); return x.length <= 254 && EMAIL_RE.test(x) ? x : null; };
+const maskEmail = (e) => { const i = e.indexOf('@'); return e[0] + '***' + e.slice(i); };
+const ipBanned = async (env, req) => (await gate(env, 'vb:' + clientIp(req), '/check', VB_LIMIT, VB_WIN_S)).locked;
+
+async function devHash(env, uid, dev) {
+  return b64u.enc(await crypto.subtle.sign('HMAC', await hmacKey(env.PEPPER), enc.encode('dev1|' + uid + '|' + dev))).slice(0, 22);
+}
+async function codeHash(env, uid, code) {
+  return b64u.enc(await crypto.subtle.sign('HMAC', await hmacKey(env.PEPPER), enc.encode('code1|' + uid + '|' + code)));
+}
+// Uniform 6 digits: reject the top sliver of the uint32 range so the modulo has no bias (4294000000 = 4294 * 1e6).
+function newCode() {
+  const a = new Uint32Array(1);
+  do crypto.getRandomValues(a); while (a[0] >= 4294000000);
+  return String(a[0] % 1000000).padStart(6, '0');
+}
+const verifierCall = async (env, uid, path) => {
+  const res = await env.VERIFIER.get(env.VERIFIER.idFromName(uid)).fetch('https://verifier' + path);
+  return { status: res.status, body: await res.json() };
+};
+const makeTicket = (env, uid, purpose, dh) =>
+  signToken(env, { typ: 'vt', uid, p: purpose, dh: dh || null, exp: Math.floor(Date.now() / 1000) + TICKET_TTL_S });
+
+// The Worker only ever calls the provider; swap by setting MAIL_PROVIDER. Never logs the address or the code.
+async function sendMail(env, to, code) {
+  if (typeof env.MAILER === 'function') return env.MAILER(to, code); // tests
+  if (env.MAIL_PROVIDER !== 'resend' || !env.RESEND_API_KEY || !env.MAIL_FROM) throw new Error('mail_not_configured');
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + env.RESEND_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: env.MAIL_FROM, to: [to],
+      subject: 'Your gats.io login code: ' + code,
+      text: 'Your gats.io verification code is ' + code + '. It expires in 10 minutes.\nIf you did not ask for it, ignore this email; nobody can use it without your password.',
+    }),
+  });
+  if (!r.ok) throw new Error('mail_http_' + r.status);
+}
+
+// Generates and emails a code. Returns null on success or a Response to hand back to the client.
+// Email is a scarce budget (Resend free = 100/day), so: per-account cooldown + hourly cap (Verifier), per-IP cap, global daily cap.
+async function sendCode(env, req, uid, email) {
+  const ipLim = await gate(env, 'ms:' + clientIp(req), '/hit', 10, 3600);
+  if (ipLim.locked) return json({ error: 'rate_limited' }, 429);
+  const code = newCode();
+  const put = await verifierCall(env, uid, '/put?h=' + encodeURIComponent(await codeHash(env, uid, code)));
+  if (put.status === 429) return json({ error: put.body.error === 'cooldown' ? 'resend_cooldown' : 'rate_limited', retryAfter: put.body.retryAfter }, 429);
+  const day = new Date().toISOString().slice(0, 10);
+  const cap = Math.max(1, Number(env.MAIL_DAILY_CAP) || 80);
+  if ((await gate(env, 'maild:' + day, '/hit', cap, 86400)).locked) {
+    await verifierCall(env, uid, '/clear');
+    return json({ error: 'email_busy' }, 503);
+  }
+  try {
+    await sendMail(env, email, code);
+  } catch (e) {
+    console.error('mail error', e && e.message);
+    await verifierCall(env, uid, '/clear');
+    return json({ error: 'email_failed' }, 502);
+  }
+  return null;
+}
+const challenge = async (env, uid, purpose, dh, email) =>
+  json({ verify: 'code', purpose, hint: maskEmail(email), ticket: await makeTicket(env, uid, purpose, dh), codeTtl: 600 }, 202);
+const parseDev = async (env, uid, b) => (DEV_RE.test(String((b && b.dev) || '')) ? devHash(env, uid, b.dev) : null);
+
 // ---------- handlers ----------
 async function register(req, env) {
+  const on = emailOn(env);
+  if (on && (await ipBanned(env, req))) return json({ error: 'ip_banned' }, 429);
   if (!(await throttleRegister(env, req))) return json({ error: 'rate_limited' }, 429);
   const b = await readBody(req);
   if (!b || !USERNAME_RE.test(String(b.username || '')) || !KEY_RE.test(String(b.key || ''))) return json({ error: 'invalid_input' }, 400);
+  const email = on ? normEmail(b.email) : null;
+  if (on && !email) return json({ error: 'invalid_email' }, 400);
   if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
   const uid = b64u.enc(crypto.getRandomValues(new Uint8Array(12)));
   const lc = b.username.toLowerCase();
   const hash = await pwHash(env, uid, b.key);
   const now = Date.now();
+  const insert = on
+    ? env.DB.prepare('INSERT INTO users (id,login,username,username_lc,pw_hash,kdf,created_at,email,email_lc) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)').bind(uid, lc, b.username, lc, hash, KDF, now, b.email.trim(), email)
+    : env.DB.prepare('INSERT INTO users (id,login,username,username_lc,pw_hash,kdf,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)').bind(uid, lc, b.username, lc, hash, KDF, now);
   try {
-    await env.DB.batch([
-      env.DB.prepare('INSERT INTO users (id,login,username,username_lc,pw_hash,kdf,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7)')
-        .bind(uid, lc, b.username, lc, hash, KDF, now),
-      logEvent(env, uid, 'register', null, await ipHash(env, req), now),
-    ]);
+    // Never-verified signups older than 1 h release their name and address (lazy cleanup, no cron).
+    if (on) await env.DB.prepare('DELETE FROM users WHERE (login=?1 OR email_lc=?2) AND email IS NOT NULL AND email_verified_at IS NULL AND created_at<?3').bind(lc, email, now - 3600000).run();
+    await env.DB.batch([insert, logEvent(env, uid, 'register', null, await ipHash(env, req), now)]);
   } catch (e) {
-    if (isUnique(e)) return json({ error: 'name_taken' }, 409);
+    if (isUnique(e)) {
+      if (on && (await env.DB.prepare('SELECT 1 AS x FROM users WHERE email_lc=?1').bind(email).first())) return json({ error: 'email_taken' }, 409);
+      return json({ error: 'name_taken' }, 409);
+    }
     throw e;
   }
-  return json(await session(env, { id: uid, username: b.username, token_version: 1 }));
+  if (!on) return json(await session(env, { id: uid, username: b.username, token_version: 1 }));
+  const err = await sendCode(env, req, uid, email);
+  if (err) return err; // the unverified row stays; logging in with the password re-sends a code
+  return challenge(env, uid, 'verify', await parseDev(env, uid, b), email);
 }
 
 async function login(req, env) {
@@ -225,9 +313,11 @@ async function login(req, env) {
   const ipk = 'li:' + clientIp(req), lk = 'll:' + lc;
   // /try reserves a slot atomically in the Gate, so a parallel burst cannot all pass a read-only check
   // before the first failure is counted (#31). Every path below must end in /fail, /ok or /done.
+  const on = emailOn(env);
+  if (on && (await ipBanned(env, req))) return json({ error: 'ip_banned' }, 429);
   const gi = await gate(env, ipk, '/try', 20, 900);
   if (gi.locked) return json({ error: 'rate_limited' }, 429);
-  const row = await env.DB.prepare('SELECT id,username,pw_hash,banned,ban_reason,token_version FROM users WHERE login=?1').bind(lc).first();
+  const row = await env.DB.prepare('SELECT ' + (on ? USER_COLS_EMAIL : USER_COLS) + ' FROM users WHERE login=?1').bind(lc).first();
   const gl = row ? await gate(env, lk, '/try', 10, 900) : { locked: false, n: 0 };
   if (gl.locked) { await gate(env, ipk, '/done', 20, 900); return json({ error: 'rate_limited' }, 429); }
   // Always do one HMAC verify so unknown users cost the same as wrong passwords.
@@ -238,9 +328,87 @@ async function login(req, env) {
   }
   await Promise.all([gate(env, ipk, '/done', 20, 900), gate(env, lk, '/ok', 10, 900)]); // release slots; success clears the account counter
   if (row.banned) return json({ error: 'banned', reason: row.ban_reason || null }, 403);
+  if (on) {
+    // Password is right. A session needs: a verified email AND a device we have seen verified before.
+    const dh = await parseDev(env, row.id, b);
+    if (!row.email) return json({ verify: 'email', purpose: 'email_needed', ticket: await makeTicket(env, row.id, 'email_needed', dh) }, 202);
+    const known = row.email_verified_at && dh && (await env.DB.prepare('SELECT 1 AS x FROM devices WHERE user_id=?1 AND dev_hash=?2').bind(row.id, dh).first());
+    if (!known) {
+      const err = await sendCode(env, req, row.id, row.email.toLowerCase());
+      if (err) return err;
+      return challenge(env, row.id, row.email_verified_at ? 'device' : 'verify', dh, row.email);
+    }
+  }
   // Soft cap: beyond 20 logins/hour per account the login still succeeds but is not logged (protects D1 write quota).
   if (!(await gate(env, 'ls:' + lc, '/hit', 20, 3600)).locked) await logEvent(env, row.id, 'login', null, await ipHash(env, req)).run();
   return json(await session(env, row));
+}
+
+// POST /verify {ticket, code}: finishes register / new-device login. Wrong codes count against the code (5 tries) and the
+// IP /64 (10/hour => IP banned for the rest of that hour). They never lock the account.
+async function verify(req, env) {
+  if (await ipBanned(env, req)) return json({ error: 'ip_banned' }, 429);
+  const b = await readBody(req);
+  const t = b && (await verifyToken(env, b.ticket, 'vt'));
+  if (!t || (t.p !== 'verify' && t.p !== 'device')) return json({ error: 'ticket_expired' }, 401);
+  const code = String(b.code || '').trim();
+  if (!/^\d{6}$/.test(code)) return json({ error: 'invalid_code_format' }, 400);
+  const ipk = 'vb:' + clientIp(req);
+  const gi = await gate(env, ipk, '/try', VB_LIMIT, VB_WIN_S); // reserve a slot so parallel guesses cannot all pass before counting
+  if (gi.locked) return json({ error: 'ip_banned' }, 429);
+  const r = (await verifierCall(env, t.uid, '/check?h=' + encodeURIComponent(await codeHash(env, t.uid, code)))).body;
+  if (r.status === 'wrong' || r.status === 'dead') {
+    const g = await gate(env, ipk, '/fail', VB_LIMIT, VB_WIN_S);
+    if (g.locked) return json({ error: 'ip_banned' }, 429);
+    return json({ error: r.status === 'dead' ? 'code_expired' : 'code_invalid', left: r.left || 0 }, r.status === 'dead' ? 410 : 401);
+  }
+  await gate(env, ipk, '/done', VB_LIMIT, VB_WIN_S); // release without counting; a success never clears earlier failures
+  if (r.status !== 'ok') return json({ error: 'code_expired' }, 410);
+  const row = await env.DB.prepare('SELECT id,username,banned,token_version,email_verified_at FROM users WHERE id=?1').bind(t.uid).first();
+  if (!row || row.banned) return json({ error: 'revoked' }, 401);
+  const now = Date.now();
+  const batch = [logEvent(env, row.id, 'verify', { p: t.p }, await ipHash(env, req), now)];
+  if (!row.email_verified_at) batch.push(env.DB.prepare('UPDATE users SET email_verified_at=?1 WHERE id=?2').bind(now, row.id));
+  if (t.dh) {
+    batch.push(env.DB.prepare('INSERT INTO devices (user_id,dev_hash,first_seen,last_seen) VALUES (?1,?2,?3,?3) ON CONFLICT(user_id,dev_hash) DO UPDATE SET last_seen=?3').bind(row.id, t.dh, now));
+    batch.push(env.DB.prepare('DELETE FROM devices WHERE user_id=?1 AND dev_hash NOT IN (SELECT dev_hash FROM devices WHERE user_id=?1 ORDER BY last_seen DESC LIMIT 10)').bind(row.id));
+  }
+  await env.DB.batch(batch);
+  return json(await session(env, row));
+}
+
+// POST /resend {ticket}: new code for an open verify/device ticket.
+async function resend(req, env) {
+  if (await ipBanned(env, req)) return json({ error: 'ip_banned' }, 429);
+  const b = await readBody(req);
+  const t = b && (await verifyToken(env, b.ticket, 'vt'));
+  if (!t || (t.p !== 'verify' && t.p !== 'device')) return json({ error: 'ticket_expired' }, 401);
+  const row = await env.DB.prepare('SELECT email,banned FROM users WHERE id=?1').bind(t.uid).first();
+  if (!row || row.banned || !row.email) return json({ error: 'revoked' }, 401);
+  const err = await sendCode(env, req, t.uid, row.email.toLowerCase());
+  if (err) return err;
+  return challenge(env, t.uid, t.p, t.dh, row.email);
+}
+
+// POST /email {ticket, email}: accounts created before email verification attach their first address.
+async function addEmail(req, env) {
+  if (await ipBanned(env, req)) return json({ error: 'ip_banned' }, 429);
+  const b = await readBody(req);
+  const t = b && (await verifyToken(env, b.ticket, 'vt'));
+  if (!t || t.p !== 'email_needed') return json({ error: 'ticket_expired' }, 401);
+  const email = normEmail(b.email);
+  if (!email) return json({ error: 'invalid_email' }, 400);
+  let r;
+  try {
+    r = await env.DB.prepare('UPDATE users SET email=?1, email_lc=?2 WHERE id=?3 AND email IS NULL AND banned=0').bind(String(b.email).trim(), email, t.uid).run();
+  } catch (e) {
+    if (isUnique(e)) return json({ error: 'email_taken' }, 409);
+    throw e;
+  }
+  if (!r.meta.changes) return json({ error: 'revoked' }, 401);
+  const err = await sendCode(env, req, t.uid, email);
+  if (err) return err;
+  return challenge(env, t.uid, 'verify', t.dh, email);
 }
 
 async function refresh(req, env) {
@@ -341,6 +509,9 @@ export default {
       if (pathname === '/register') return await register(req, env);
       if (pathname === '/login') return await login(req, env);
       if (pathname === '/refresh') return await refresh(req, env);
+      if (emailOn(env) && pathname === '/verify') return await verify(req, env);
+      if (emailOn(env) && pathname === '/resend') return await resend(req, env);
+      if (emailOn(env) && pathname === '/email') return await addEmail(req, env);
       if (pathname === '/rename') return await rename(req, env, ctx);
       return json({ error: 'not_found' }, 404);
     } catch (e) {
