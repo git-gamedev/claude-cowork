@@ -23,6 +23,11 @@ test("input validation and reserved names", async () => {
   assert.equal((await call(env, "/register", { body: { username: "a,b", key: key() } })).status, 400);
   assert.equal((await call(env, "/register", { body: { username: "ok_name", key: "short" } })).status, 400);
   assert.equal((await call(env, "/register", { body: { username: "Admin", key: key() } })).status, 409);
+  let ipn = 0; // distinct IP per probe so the per-IP register limit does not mask the 409
+  for (const n of ["admin.", "ad-min", "a.d.m.i.n", "adm1n", "admin1", "_admin", "gats_io", "gatsio", "m0derator", "moderator.", "st-aff", "0wner", "supp0rt", "r00t", "system."]) {
+    assert.equal((await call(env, "/register", { body: { username: n, key: key() }, ip: "9.9.9." + (++ipn) })).status, 409, n);
+  }
+  assert.equal((await call(env, "/register", { body: { username: "adminton", key: key() }, ip: "9.9.9.200" })).status, 200, "non-reserved lookalike prefix stays allowed");
 });
 
 test("tampered / garbage tokens are rejected", async () => {

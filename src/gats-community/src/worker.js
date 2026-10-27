@@ -154,7 +154,11 @@ async function throttleRegister(env, req) {
 const throttleRename = async (env, req) => !(await gate(env, 'ren:' + clientIp(req), '/hit', 10, 3600)).locked;
 
 const isUnique = (e) => /UNIQUE/i.test(String(e && e.message) + String(e && e.cause));
-const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase());
+// Canonical form: lowercase, drop . _ - separators and trailing digits, fold look-alikes (0->o, 1/l->i, 3->e, 4->a, 5->s, 7->t).
+const FOLD = { 0: 'o', 1: 'i', l: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't' };
+const canonName = (u) => String(u).toLowerCase().replace(/[._-]/g, '').replace(/\d+$/, '').replace(/[013457l]/g, (c) => FOLD[c]);
+const RESERVED_CANON = new Set([...RESERVED_NAMES].map(canonName));
+const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase()) || RESERVED_CANON.has(canonName(username));
 // Compiled once per distinct config value, not per request.
 let roomRules = null;
 function isAllowedRoom(room, env) {

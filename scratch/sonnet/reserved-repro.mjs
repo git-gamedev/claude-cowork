@@ -5,7 +5,7 @@ const grab = (re) => src.match(re)[0];
 const code = [
   grab(/const USERNAME_RE = .*;/),
   grab(/const RESERVED_NAMES = new Set\(\[[\s\S]*?\]\);/),
-  grab(/const isReservedUsername = .*;/),
+  grab(/const FOLD = .*;/), grab(/const canonName = .*;/), grab(/const RESERVED_CANON = .*;/), grab(/const isReservedUsername = .*;/),
   'return {USERNAME_RE, isReservedUsername};'
 ].join('\n');
 const { USERNAME_RE, isReservedUsername } = new Function(code)();
