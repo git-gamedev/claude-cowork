@@ -1,7 +1,0 @@
-register v1 200 register v2 200
-C seq per-account wrong pw, rotating IPs: first 429 at attempt 11 {"401":10,"429":3}
-C2 correct pw while locked: 429
-D parallel x40 per-account wrong pw: {"401":40} -> counted failures beyond limit 10 = 30
-D2 sequential after burst (new IP): 429  correct pw: 429
-B2 parallel x60 one IP: {"401":40,"429":20}
-B3 next sequential from same IP: 429

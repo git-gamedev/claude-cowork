@@ -1,0 +1,46 @@
+name = "login-info-handler"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Comma-separated Origins allowed to open the /presence WebSocket.
+ALLOWED_ORIGINS = "https://gats.io,https://www.gats.io"
+# Room names (= gats server host); the worker also requires this DNS suffix.
+ROOM_REGEX = "^[a-z0-9.:-]{1,64}$"
+ALLOWED_ROOM_SUFFIX = "gats.io"
+# Global cap on new accounts per UTC day (protects the D1 free-plan write quota).
+MAX_REG_PER_DAY = "300"
+# Email verification. Keep "off" until schema_003.sql is applied and the mail
+# provider below is configured; "on" makes register and new-device login require an emailed code.
+EMAIL_VERIFY = "off"
+MAIL_PROVIDER = "resend"
+MAIL_FROM = "gats.io login <login@YOUR-VERIFIED-DOMAIN>"
+# Global cap on emails per UTC day. Resend free allows 100/day; keep headroom.
+MAIL_DAILY_CAP = "80"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "gats-community"
+database_id = "PASTE_ID_FROM_wrangler_d1_create"
+
+[durable_objects]
+bindings = [
+  { name = "ROOMS", class_name = "Room" },
+  { name = "GATE",  class_name = "Gate" },
+  { name = "VERIFIER", class_name = "Verifier" },
+]
+
+# Free plan: Durable Objects MUST be SQLite-backed (new_sqlite_classes).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Gate"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Verifier"]
+
+# Secrets (never put these in this file). Set with `wrangler secret put <NAME>`:
+#   TOKEN_SECRET  signs/verifies session tokens (HMAC-SHA256)
+#   PEPPER        keys the stored password hashes
+#   ADMIN_KEY     authorizes POST /admin/ban
+#   RESEND_API_KEY  send-only API key for the mail provider (only needed when EMAIL_VERIFY=on)

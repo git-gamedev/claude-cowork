@@ -1,4 +1,0 @@
-refresh: 432 B/call allocated (incl. harness Request/Response)
-refresh: retained after GC vs start: 343.6 KiB
-alarm S=20: 20 deserializeAttachment/alarm, 6.1 KiB allocated/alarm
-alarm S=100: 100 deserializeAttachment/alarm, 24.1 KiB allocated/alarm

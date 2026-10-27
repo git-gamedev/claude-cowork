@@ -1,2 +1,0 @@
-const r=[];for(let i=0;i<150;i++){r.push((await fetch('http://localhost:8788/admin/ban',{method:'POST',headers:{'content-type':'application/json','x-admin-key':'wrong'+i,'cf-connecting-ip':'77.7.7.7'},body:JSON.stringify({login:'nobody'})})).status);}
-const t=r.reduce((m,s)=>(m[s]=(m[s]||0)+1,m),{});console.log('150 wrong X-Admin-Key from one IP:',JSON.stringify(t),'(429 never = no throttle)');process.exit(0)
