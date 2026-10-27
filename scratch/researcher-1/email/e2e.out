@@ -1,0 +1,37 @@
+PASS register without email -> 400 invalid_email
+PASS register -> 202 verify, masked hint
+PASS code mailed (6 digits)
+INFO login before verifying (unverified acct) -> {"s":429,"err":"resend_cooldown"}
+PASS wrong code -> 401 left 4
+PASS bad code format -> 400
+PASS correct code -> session
+PASS known device logs in without code
+INFO cooldown, sleeping 60
+PASS new device -> 202 device challenge
+PASS device code -> session
+PASS device 2 now known
+INFO login with NO dev id -> {"s":429,"err":"resend_cooldown"}
+INFO resend right after challenge -> {"s":429,"err":"resend_cooldown","retryAfter":60}
+PASS duplicate email (case-insens.) -> 409 email_taken
+PASS invalid email -> 400
+INFO 13 wrong codes from one IP "401:code_invalid 401:code_invalid 401:code_invalid 401:code_invalid 410:code_expired 410:code_expired 410:code_expired 410:code_expired 410:code_expired 410:code_expired 410:code_expired 410:code_expired 410:code_expired"
+FAIL 11th+ wrong code -> 429 ip_banned ["401:code_invalid","401:code_invalid","401:code_invalid","401:code_invalid","410:code_expired","410:code_expired","410:code_expired","410:code_expired","410:code_expired","410:code_expired","410:code_expired","410:code_expired","410:code_expired"]
+FAIL banned IP cannot log in (even correct pw, known device) {"s":200,"d":{"token":"v1.eyJ1aWQiOiJJbndFY3NfSWI2YUVZOEhNIiwibmFtZSI6Ik1haWxlcjEiLCJ0diI6MSwiaWF0IjoxNzkzMDc3MDk4LCJleHAiOjE3OTM2ODE4OTh9.XldI2sOF9LaSar9xCN4UeIPBTrXmoZ7AaKXnFhCnXCo","exp":1793681898000,"user":{"id":"InwEcs_Ib6aEY8HM","username":"Mailer1"}}}
+FAIL banned IP cannot register {"s":202,"d":{"verify":"code","purpose":"verify","hint":"m***@example.com","ticket":"v1.eyJ0eXAiOiJ2dCIsInVpZCI6IlJhdVZUTkpacVF6b1F3cm8iLCJwIjoidmVyaWZ5IiwiZGgiOiItbGxrTkgtNHNZLVRRQ2QtTTM1OGJaIiwiZXhwIjoxNzkzMDc3Njk5fQ.kpkm_RnBNgkJ5_CKaD_f8iZsQcuCPB9zHQ1b187dH3o","codeTtl":600}}
+INFO Mailer2 (target of wrong codes) from another IP -> {"s":429,"err":"resend_cooldown"}
+PASS account NOT locked by code failures (only cooldown at most)
+INFO parallel x40 wrong codes, one code, one IP {"401:code_invalid":4,"410:code_expired":6,"429:ip_banned":30}
+PASS parallel burst: <=10 attempts counted before IP ban (Gate /try)
+INFO cooldown, sleeping 60
+INFO resend -> {"s":202}
+INFO parallel x30 wrong codes, 30 IPs, one code {"401:code_invalid":4,"410:code_expired":26}
+PASS wrong guesses on one code capped by Verifier (5 tries)
+PASS legacy account -> 202 email_needed
+PASS attach email -> 202 verify
+PASS legacy verified -> session
+INFO registrations needed to hit global mail cap {"registrations":10,"mailsSentThisPhase":9,"busy":true}
+PASS known device login unaffected by mail cap
+INFO legit NEW device login while cap reached -> {"s":503,"err":"email_busy"}
+INFO legit new registration while cap reached -> {"s":503,"err":"email_busy"}
+
+3 FAILED

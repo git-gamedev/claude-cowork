@@ -1,0 +1,8 @@
+PASS two fresh tickets
+10 counted wrong guesses (2 codes x 5): 401,401,401,401,410,401,401,401,401,429
+11th request status 429 ip_banned
+PASS banned IP: login with correct pw + known device -> 429 ip_banned
+PASS banned IP: register -> 429 ip_banned
+PASS same account from another IP still logs in (no account lockout)
+
+ALL PASSED
