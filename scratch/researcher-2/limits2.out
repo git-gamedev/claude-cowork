@@ -1,0 +1,9 @@
+up (2s)
+PASS | R2 | 12 renames, one IP, one token (limit 10/h per IP, cooldown 24h) | 200:ok 429:rename_cooldown 429:rename_cooldown 429:rename_cooldown 429:rename_cooldown 429:rename_cooldown 429:rename_cooldown 429:rename_cooldown 429:rename_cooldown 429:rename_cooldown 429:rate_limited 429:rate_limited
+PASS | C1 | 305 registrations from 305 distinct IPs (MAX_REG_PER_DAY=300; 1 already used by R2) | 200 x299, first 429 at attempt 300, 429 x6
+INFO | persistA | 15 unknown-login failures from 203.0.113.98: 401,401,401,401,401,401,401,401,401,401,401,401,401,401,401 | 7 wrong-pw on capabc0 from 7 IPs: 401,401,401,401,401,401,401
+--- restarting workerd (same local state dir) ---
+up (2s)
+PASS | P1 | IP failure counter survives a workerd restart (15 before + 6 after, limit 20) | 401,401,401,401,401,429
+PASS | P2 | account failure counter survives a workerd restart (7 before + 4 after, limit 10) | 401,401,401,429
+--- dev.log errors ---

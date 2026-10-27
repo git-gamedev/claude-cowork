@@ -1,0 +1,78 @@
+error: Please commit or stash them.
+testing HEAD 037a277
+wd src == HEAD src
+##### suite 1: smoke v2 + gate-realrun
+ALL PASSED
+smoke checks passed: see-output
+PASS | F1 | 15 successful logins, one IP | {"200":15}
+PASS | F2 | 25 sequential failures (unknown login), one IP | first 429 at attempt 21; {"401":20,"429":5}
+PASS | F3 | 12 wrong pw from 12 IPs, then correct pw | first 429 at attempt 11; correct pw afterwards -> 429 (429 = lockout griefing confirmed)
+PASS | F4 | 60 parallel wrong-pw logins, one account, one IP | {"401":10,"429":50}; excess over limit 10 = 0
+PASS | F5 | 60 parallel failures (unknown login), one IP | {"401":20,"429":40}; excess over limit 20 = 0
+PASS | F6 | 25 failures from 25 addrs in one IPv6 /64 | first 429 at attempt 21
+PASS | F7 | 7 registrations from one IP | [200,200,200,200,200,429,429]
+PASS | B1 | unknown user vs wrong pw (fresh IPs) | unknown 401 {"error":"invalid_credentials"} | wrong 401 {"error":"invalid_credentials"}
+PASS | R1 | reserved-name variants register? | admin=409 Admin=409 admin.=409 admin_=409 admin-=409 ad.min=409 gats.io=409 gats-io=409 gats_io=409 mod.=409 root1=409 system.=409 ; 200 = registered despite reserved look-alike (only if not already taken from an 
+##### suite 2: limits
+node:internal/deps/undici/undici:14976
+      Error.captureStackTrace(err);
+            ^
+
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:14976:13
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async post (file:///root/repo/scratch/researcher-2/limits2.mjs:7:13)
+    at async file:///root/repo/scratch/researcher-2/limits2.mjs:16:15 {
+  [cause]: Error: connect ECONNREFUSED 127.0.0.1:8788
+      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+    errno: -111,
+    code: 'ECONNREFUSED',
+    syscall: 'connect',
+    address: '127.0.0.1',
+    port: 8788
+  }
+}
+
+Node.js v22.22.2
+node:internal/deps/undici/undici:14976
+      Error.captureStackTrace(err);
+            ^
+
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:14976:13
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async post (file:///root/repo/scratch/researcher-2/limits2.mjs:7:13)
+    at async file:///root/repo/scratch/researcher-2/limits2.mjs:27:41 {
+  [cause]: Error: connect ECONNREFUSED 127.0.0.1:8788
+      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+    errno: -111,
+    code: 'ECONNREFUSED',
+    syscall: 'connect',
+    address: '127.0.0.1',
+    port: 8788
+  }
+}
+
+Node.js v22.22.2
+node:internal/deps/undici/undici:14976
+      Error.captureStackTrace(err);
+            ^
+
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:14976:13
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async post (file:///root/repo/scratch/researcher-2/limits2.mjs:7:13)
+    at async file:///root/repo/scratch/researcher-2/limits2.mjs:32:54 {
+  [cause]: Error: connect ECONNREFUSED 127.0.0.1:8788
+      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1637:16) {
+    errno: -111,
+    code: 'ECONNREFUSED',
+    syscall: 'connect',
+    address: '127.0.0.1',
+    port: 8788
+  }
+}
+
+Node.js v22.22.2
+FAIL | P1 | IP failure counter survives a workerd restart (15 before + 6 after, limit 20) | 401,401,401,401,401,401
+FAIL | P2 | account failure counter survives a workerd restart (7 before + 4 after, limit 10) | 401,401,401,401

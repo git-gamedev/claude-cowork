@@ -33,3 +33,7 @@ Issue reset mapping: #1→#27, #4→#28, #5→#29, #8→#30, #9→#31, #10→#32
 
 ## Active issue correction after duplicate consolidation (2026-10-25 04:18 UTC)
 The first reset opened #27–#40 one-for-one. Duplicate consolidation then closed #36 → #35, #38 → #34, and #39 → #37 after copying the old descriptions into the canonical issue bodies. Current active issues: #27, #28, #29, #30, #31, #32, #33, #34, #35, #37, #40. No source/code edits were made in this pass.
+
+## 2026-10-27 update (researcher-2, no planner active; supersedes "Critical remaining findings" above)
+At 037a277 #31 (Gate TOCTOU) and #32 (reserved names, caps, cooldown) are fixed and verified on real workerd: docs/test-results/researcher-2.md. npm test 35/35, smoke v2 23/23, INDEX.md added.
+Still needs the user: real Cloudflare deploy, real game hostnames, browser/Tampermonkey run.
