@@ -1,0 +1,9 @@
+PASS | F1 | 15 successful logins, one IP | {"200":15}
+PASS | F2 | 25 sequential failures (unknown login), one IP | first 429 at attempt 21; {"401":20,"429":5}
+PASS | F3 | 12 wrong pw from 12 IPs, then correct pw | first 429 at attempt 11; correct pw afterwards -> 429 (429 = lockout griefing confirmed)
+FAIL | F4 | 60 parallel wrong-pw logins, one account, one IP | {"401":53,"429":7}; excess over limit 10 = 43
+FAIL | F5 | 60 parallel failures (unknown login), one IP | {"401":60}; excess over limit 20 = 40
+PASS | F6 | 25 failures from 25 addrs in one IPv6 /64 | first 429 at attempt 21
+PASS | F7 | 7 registrations from one IP | [200,200,200,200,200,429,429]
+PASS | B1 | unknown user vs wrong pw (fresh IPs) | unknown 401 {"error":"invalid_credentials"} | wrong 401 {"error":"invalid_credentials"}
+FAIL | R1 | reserved-name variants register? | admin=409 Admin=409 admin.=200 admin_=200 admin-=200 ad.min=200 gats.io=409 gats-io=200 gats_io=200 mod.=200 root1=200 system.=200 ; 200 = registered despite reserved look-alike (only if not already taken from an earlier run)
