@@ -9,6 +9,7 @@ This guide matches the **canonical implementation in this directory** (`src/gats
 - `src/room.js`: SQLite-backed Durable Object for room presence. `src/gate.js`: Gate Durable Object for rate limiting (see the last section).
 - `schema.sql`: initial D1 database tables.
 - `schema_002.sql`: additive migration for `renamed_at`, used by the 24-hour rename cooldown.
+- `schema_003.sql`: additive migration for email verification (email columns and the `devices` table); apply once after 002.
 - `wrangler.toml`: Worker name, binding configuration and environment variables.
 
 The login and password-derived key are processed as follows: the userscript stretches the password with WebCrypto PBKDF2-SHA-256 (600,000 iterations) using a stable salt based on the original, lowercase login identifier. Only the derived key is sent to the Worker. The Worker HMACs it with `PEPPER` and stores the result. The session token is HMAC-signed and is kept by Tampermonkey storage (`GM_setValue`), not page JavaScript storage.
@@ -104,10 +105,46 @@ For this test, use disposable test accounts first. The current code has been syn
 | POST | `/login` | Authenticate; body uses original `login` identifier and derived `key` |
 | POST | `/refresh` | Refresh/validate a session token |
 | POST | `/rename` | Update public display name; authenticated Bearer token required; body uses `username` and optional current `room` |
+| POST | `/verify` | Only when `EMAIL_VERIFY=on`. Body `ticket` + 6-digit `code`; returns the session |
+| POST | `/resend` | Only when `EMAIL_VERIFY=on`. Body `ticket`; mails a fresh code (60 s cooldown, 5/hour per account) |
+| POST | `/email` | Only when `EMAIL_VERIFY=on`. Body `ticket` + `email`; lets an account created before this feature attach its address |
 | GET | `/presence?room=...` | WebSocket upgrade; session token is passed in the WebSocket subprotocol, not the URL |
 | POST | `/admin/ban` | Admin ban/unban endpoint; requires `X-Admin-Key` |
 
 The current canonical Worker does **not** implement the donor tree's `/prelogin`, `/signup`, `/logout_all`, or `/unregister` routes. Do not follow instructions written for those donor endpoints when deploying this version.
+
+## Email verification (optional, off by default)
+
+With `EMAIL_VERIFY = "on"` the Worker emails a random 6-digit code (a) when an account is created and (b) when someone logs in from a browser it has not seen verified before. Existing accounts are asked for an email address once, at their next login. Design and reasoning: `docs/design-email-verification.md`.
+
+**What "new location" means.** The userscript keeps a random device id in Tampermonkey storage. A login from a browser profile without a trusted device id needs a code; the same browser on a different Wi-Fi or phone network does not. Reinstalling the script, clearing its storage, or a different browser all count as a new device. Each account remembers its 10 most recent trusted devices.
+
+**What happens on wrong codes.** Each code allows 5 wrong tries and then dies; the user logs in again (or presses Resend) for a new one. 10 wrong codes within an hour from one network (IPv6 counted per /64) ban that network from register, login and verify until the hour ends. The account itself is never locked: the owner can still verify from another network.
+
+### One-time setup
+
+1. **Pick a mail provider.** Cloudflare's own Email Sending needs the paid Workers plan (as of Oct 2026), so it is not free-tier. The Worker ships with a Resend adapter. Resend's free plan allows about 100 emails per day and 3,000 per month, and you must verify a sending domain you own (add the DNS records Resend shows; this can take hours). Check Resend's current limits before relying on them. Create a **send-only** API key limited to that domain.
+2. **Apply the migration once:** `npx wrangler d1 execute gats-community --remote --file=schema_003.sql` (after `schema_002.sql`). It adds `users.email`, `email_lc`, `email_verified_at` and the `devices` table. It is safe while the feature is still off.
+3. **Set the key:** `npx wrangler secret put RESEND_API_KEY`.
+4. **Edit `wrangler.toml`:** set `MAIL_FROM` to an address on your verified domain, keep `MAIL_DAILY_CAP` below your provider's daily limit (default 80), then set `EMAIL_VERIFY = "on"`.
+5. **Deploy** (`npx wrangler deploy`). The `Verifier` Durable Object is added by migration `v2` automatically. Deploy the updated userscript to every player; an old userscript cannot answer the code prompt and will show a generic error.
+
+### Budget and limits
+
+- Emails are the scarce resource. When the global daily cap is reached, sign-ups and new-device logins get an "email_busy" message until the next UTC day; known devices keep working. Per-IP (10/hour) and per-account limits keep one person from burning the whole budget, but a determined attacker with many IPs can still exhaust it. Raising the cap means a paid mail plan.
+- Each login now makes one extra Durable Object call (the IP-ban check); each code sent or checked makes a few more. Re-check `docs/cost-estimate.md` against the 100,000 requests/day Durable Object free cap if you expect heavy traffic.
+- Codes are stored only as an HMAC, expire after 10 minutes, and are never logged. The Worker never logs email addresses.
+- One address per account. The "email already used" message does reveal that an address is registered; this is accepted. A sign-up that is never verified frees its name and address after one hour.
+- Not built yet: changing or removing an email address, and "log out other devices".
+- Not tested yet against the real Resend API, real workerd, or a browser. Run the smoke steps below once before announcing it.
+
+### Smoke test for email verification
+
+1. Register a test account with your own address: a code arrives within a minute; enter it; the badge shows your name.
+2. Log out, log in again: no code (known device).
+3. Log in from another browser or after clearing the script's storage: a code is required.
+4. Enter 5 wrong codes: the code dies; Resend gives a new one that works.
+5. Check the `wrangler tail` output shows no email addresses or codes.
 
 ## Admin ban/unban
 

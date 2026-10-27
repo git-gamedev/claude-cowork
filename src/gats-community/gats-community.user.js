@@ -30,6 +30,19 @@ const GCL = {
     const { WORKER_URL } = GCL.cfg;
     const SESSION_KEY = 'gcl_session';
     const PBKDF2_ITERATIONS = 600000; // runs in YOUR browser, so no Worker CPU cap applies
+    const DEV_KEY = 'gcl_dev';
+    // Identifies THIS browser profile for "new location" checks. Random, never derived from you, invisible to the page.
+    function getDevice() {
+        let d = GM_getValue(DEV_KEY, null);
+        if (!d || !/^[A-Za-z0-9_-]{22,43}$/.test(d)) {
+            const b = crypto.getRandomValues(new Uint8Array(16));
+            let t = '';
+            for (const x of b) t += String.fromCharCode(x);
+            d = btoa(t).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+            GM_setValue(DEV_KEY, d);
+        }
+        return d;
+    }
     let currentUser = null;
     let currentToken = null;
 
@@ -127,9 +140,19 @@ const GCL = {
         rate_limited: 'Too many attempts. Wait a few minutes.',
         banned: 'This account is banned.',
         revoked: 'Session expired. Log in again.',
+        invalid_email: 'Enter a valid email address.',
+        email_taken: 'That email is already used by another account.',
+        code_expired: 'That code is no longer valid. Press Resend for a new one.',
+        ticket_expired: 'This step timed out. Log in again.',
+        invalid_code_format: 'The code is 6 digits.',
+        ip_banned: 'Too many wrong codes from your network. Try again in up to an hour.',
+        email_busy: 'We have sent too many emails today. Try again tomorrow.',
+        email_failed: 'The email could not be sent. Try again in a minute.',
     };
     const errText = (r) => {
         const e = r.data && r.data.error;
+        if (e === 'code_invalid') return 'Wrong code. ' + (r.data.left > 0 ? r.data.left + ' tries left for this code.' : '');
+        if (e === 'resend_cooldown') return 'Please wait ' + (Number(r.data.retryAfter) || 60) + ' s before asking for another code.';
         if (e === 'rename_cooldown') { // worker /rename 429 {retryAfter: seconds} (#41)
             const sec = Number(r.data.retryAfter) || 0;
             const wait = sec >= 3600 ? Math.ceil(sec / 3600) + ' h' : Math.max(1, Math.ceil(sec / 60)) + ' min';
@@ -198,6 +221,7 @@ const GCL = {
             <input id="gcl-u" placeholder="Username" autocomplete="username" maxlength="16">
             <input id="gcl-p" type="password" placeholder="Password" autocomplete="${reg ? 'new-password' : 'current-password'}">
             ${reg ? '<input id="gcl-p2" type="password" placeholder="Repeat password" autocomplete="new-password">' : ''}
+            ${reg ? '<input id="gcl-e" type="email" placeholder="Email (we send you a code)" autocomplete="email" maxlength="254">' : ''}
             <button id="gcl-go">${reg ? 'Sign up' : 'Log in'}</button>
             <button class="alt" id="gcl-sw">${reg ? 'I have an account' : 'Create account'}</button>
             <div id="gcl-msg"></div>`);
@@ -209,11 +233,81 @@ const GCL = {
             if (!/^[A-Za-z0-9_.-]{3,16}$/.test(u)) return msg(ERRORS.invalid_input);
             if (p.length < 8) return msg('Password must be at least 8 characters.');
             if (reg && p !== m.querySelector('#gcl-p2').value) return msg('Passwords do not match.');
+            const email = reg ? m.querySelector('#gcl-e').value.trim() : '';
+            if (reg && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return msg(ERRORS.invalid_email);
             msg('Working...');
             try {
                 const key = await deriveKey(u, p);
-                const r = await apiCall(reg ? '/register' : '/login', { body: reg ? { username: u, key } : { login: u, key } });
+                const dev = getDevice();
+                const r = await apiCall(reg ? '/register' : '/login', { body: reg ? { username: u, key, email, dev } : { login: u, key, dev } });
                 if (r.status === 200 && setSession(r.data)) closeModal();
+                else if (r.status === 202 && handleChallenge(r.data)) return;
+                else msg(errText(r));
+            } catch (e) { msg('Network error.'); }
+        });
+    }
+
+    // Server answered 202: the password was right but an emailed code (or an email address) is still needed.
+    function handleChallenge(d) {
+        if (d && d.verify === 'code' && d.ticket) { showCodeModal(d); return true; }
+        if (d && d.verify === 'email' && d.ticket) { showEmailModal(d.ticket); return true; }
+        return false;
+    }
+
+    function showEmailModal(ticket) {
+        const m = openModal(`
+            <h3>Add your email</h3>
+            <div>Accounts now need a verified email. We send a code to confirm it.</div>
+            <input id="gcl-e" type="email" placeholder="Email" autocomplete="email" maxlength="254">
+            <button id="gcl-go">Send code</button>
+            <div id="gcl-msg"></div>`);
+        const msg = (t) => { m.querySelector('#gcl-msg').textContent = t; };
+        m.querySelector('#gcl-go').addEventListener('click', async () => {
+            const email = m.querySelector('#gcl-e').value.trim();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return msg(ERRORS.invalid_email);
+            msg('Sending...');
+            try {
+                const r = await apiCall('/email', { body: { ticket, email } });
+                if (r.status === 202 && handleChallenge(r.data)) return;
+                msg(errText(r));
+            } catch (e) { msg('Network error.'); }
+        });
+    }
+
+    function showCodeModal(d) {
+        let ticket = d.ticket;
+        const m = openModal(`
+            <h3>Enter your code</h3>
+            <div>We emailed a 6-digit code to ${escapeHtml(String(d.hint || 'your email'))}. It is valid for 10 minutes.</div>
+            <input id="gcl-c" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="123456" autocomplete="one-time-code">
+            <button id="gcl-go">Verify</button>
+            <button class="alt" id="gcl-rs" disabled>Resend (60)</button>
+            <div id="gcl-msg"></div>`);
+        const msg = (t) => { m.querySelector('#gcl-msg').textContent = t; };
+        const rs = m.querySelector('#gcl-rs');
+        let left = 60;
+        const tick = setInterval(() => {
+            if (!document.body.contains(rs)) return clearInterval(tick);
+            left = Math.max(0, left - 1);
+            rs.disabled = left > 0;
+            rs.textContent = left > 0 ? 'Resend (' + left + ')' : 'Resend code';
+        }, 1000);
+        m.querySelector('#gcl-go').addEventListener('click', async () => {
+            const code = m.querySelector('#gcl-c').value.trim();
+            if (!/^\d{6}$/.test(code)) return msg(ERRORS.invalid_code_format);
+            msg('Checking...');
+            try {
+                const r = await apiCall('/verify', { body: { ticket, code } });
+                if (r.status === 200 && setSession(r.data)) { clearInterval(tick); closeModal(); }
+                else if (r.data && (r.data.error === 'ticket_expired' || r.data.error === 'revoked')) { clearInterval(tick); showAuthModal('login'); }
+                else msg(errText(r));
+            } catch (e) { msg('Network error.'); }
+        });
+        rs.addEventListener('click', async () => {
+            msg('Sending...');
+            try {
+                const r = await apiCall('/resend', { body: { ticket } });
+                if (r.status === 202 && r.data.ticket) { ticket = r.data.ticket; left = 60; rs.disabled = true; msg('A new code is on its way.'); }
                 else msg(errText(r));
             } catch (e) { msg('Network error.'); }
         });
