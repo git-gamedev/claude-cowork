@@ -62,3 +62,24 @@ test('window expiry resets the count; alarm removes the row', async () => {
   await g.alarm();
   assert.equal(s.data.size, 0);
 });
+
+test('/try reserves slots atomically: only `limit` parallel tries pass; /done releases, /fail consumes (#31)', async () => {
+  const s = makeStore(); const g = new Gate({ storage: s.storage }, {});
+  const rs = await Promise.all(Array.from({ length: 10 }, () => call(g, '/try', 3)));
+  assert.equal(rs.filter((r) => r.status === 200).length, 3);
+  assert.equal(rs.filter((r) => r.status === 429).length, 7);
+  await call(g, '/done', 3);                                   // one attempt finished without failing
+  assert.equal((await call(g, '/try', 3)).status, 200);        // its slot is free again
+  assert.equal((await call(g, '/try', 3)).status, 429);
+  for (let i = 0; i < 3; i++) await call(g, '/fail', 3);       // three failures consume the reservations
+  assert.equal((await call(g, '/check', 3)).locked, true);
+  assert.equal((await call(g, '/try', 3)).status, 429);
+});
+
+test('/try reservations expire so a crashed request cannot hold a slot forever (#31)', async () => {
+  const s = makeStore(); const g = new Gate({ storage: s.storage }, {});
+  assert.equal((await call(g, '/try', 1)).status, 200);
+  assert.equal((await call(g, '/try', 1)).status, 429);
+  g.pending = g.pending.map(() => Date.now() - 60000);         // simulate a leaked reservation older than the TTL
+  assert.equal((await call(g, '/try', 1)).status, 200);
+});

@@ -133,3 +133,47 @@ test("reserved names: separator and digit look-alike variants are rejected on re
   }
   assert.equal((await call(env, "/register", { body: { username: "adminton", key: key("y") }, ip: "8.8.4.4" })).status, 200);
 });
+
+// ---- claude-2: regression tests for #31 (check-then-fail TOCTOU) and #32 (reserved-name bypass) ----
+test("parallel failed logins from one IP cannot overshoot the IP limit (#31)", async () => {
+  const env = makeEnv();
+  const rs = await Promise.all(Array.from({ length: 60 }, (_, i) =>
+    call(env, "/login", { body: { login: "ghost" + i, key: key("z") }, ip: "7.7.7.7" })));
+  const n401 = rs.filter((r) => r.status === 401).length;
+  assert.ok(n401 <= 20, `only 20 wrong guesses may be evaluated, got ${n401}`);
+  assert.equal(n401 + rs.filter((r) => r.status === 429).length, 60);
+});
+
+test("parallel failures on one account from many IPs cannot overshoot the account limit (#31)", async () => {
+  const env = makeEnv();
+  await call(env, "/register", { body: { username: "victim2", key: key("a") } });
+  const rs = await Promise.all(Array.from({ length: 40 }, (_, i) =>
+    call(env, "/login", { body: { login: "victim2", key: key("z") }, ip: "9.9." + i + ".1" })));
+  const n401 = rs.filter((r) => r.status === 401).length;
+  assert.ok(n401 <= 10, `only 10 wrong guesses may be evaluated, got ${n401}`);
+});
+
+test("a few parallel correct logins (several tabs) are all served and leave no lock behind (#31)", async () => {
+  const env = makeEnv();
+  await call(env, "/register", { body: { username: "multitab", key: key("a") } });
+  const rs = await Promise.all(Array.from({ length: 5 }, () => call(env, "/login", { body: { login: "multitab", key: key("a") }, ip: "6.6.6.6" })));
+  assert.deepEqual(rs.map((r) => r.status), [200, 200, 200, 200, 200]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal((await call(env, "/login", { body: { login: "multitab", key: key("a") }, ip: "6.6.6.6" })).status, 200);
+});
+
+test("reserved names cannot be bypassed with punctuation, case or digit look-alikes (#32)", async () => {
+  const env = makeEnv();
+  const bad = ["admin.", "ad-min", "a_d.m-i_n", "admin_", "Admin", "mod.erator", "m0derator", "adm1n", "gats_io", "Gatsio", "sy5tem", "off1cial", "r00t"];
+  for (let i = 0; i < bad.length; i++) {
+    const r = await call(env, "/register", { body: { username: bad[i], key: key() }, ip: `1.1.${i}.1` });
+    assert.equal(r.status, 409, `${bad[i]} must be rejected`);
+  }
+  const ok = ["adam", "modest", "rooty", "staffan"];
+  for (let i = 0; i < ok.length; i++) {
+    const r = await call(env, "/register", { body: { username: ok[i], key: key() }, ip: `2.2.${i}.1` });
+    assert.equal(r.status, 200, `${ok[i]} must still be allowed`);
+  }
+  const t = (await call(env, "/register", { body: { username: "plainbob", key: key() }, ip: "3.3.3.3" })).json.token;
+  assert.equal((await call(env, "/rename", { token: t, body: { username: "ad.min" } })).status, 409);
+});

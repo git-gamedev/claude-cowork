@@ -386,7 +386,7 @@ const GCL = {
 
     const WS_URL = GCL.cfg.WORKER_URL.replace(/^http/, 'wss') + '/presence';
     let sock = null, room = null, selfPid = null, selfGname = null;
-    let hbTimer = null, retryTimer = null, retries = 0, want = false;
+    let retryTimer = null, retries = 0, want = false;
     let handlers = {};
 
     const isOpen = () => !!sock && sock.readyState === 1;
@@ -417,7 +417,7 @@ const GCL = {
         sock = s;
         s.onopen = () => {
             retries = 0;
-            hbTimer = setInterval(() => { if (s.readyState === 1) s.send('ping'); }, 25000);
+            s.hb = setInterval(() => { if (s.readyState === 1) s.send('ping'); }, 25000); // per socket: a stale socket's close must not stop a newer heartbeat
             if (selfPid) send({ t: 'hello', pid: selfPid, gname: selfGname || '' });
         };
         s.onmessage = (ev) => {
@@ -427,9 +427,10 @@ const GCL = {
             if (handlers[m.t]) handlers[m.t](m);
         };
         s.onclose = (ev) => {
-            clearInterval(hbTimer);
-            if (sock === s) sock = null;
-            if (ev.code === 4002) { want = false; GCL.auth.logout(); return; } // revoked / banned
+            clearInterval(s.hb);
+            if (ev.code === 4002) { if (sock === s) sock = null; want = false; GCL.auth.logout(); return; } // revoked / banned
+            if (sock !== s) return;            // stale socket (we already moved on): change no shared state
+            sock = null;
             if (ev.code === 4000) { want = false; return; }                    // replaced by another tab
             schedule();
         };
@@ -596,7 +597,7 @@ const GCL = {
         let out = frame;
         if (frame.charCodeAt(0) === 97 || frame.charCodeAt(0) === 100) { // 'a' or 'd'
             const p = frame.split(',');
-            if (p[0] === 'a' && GCL.auth.isLoggedIn()) {
+            if (p[0] === 'a' && p.length > 18 && GCL.auth.isLoggedIn()) {
                 p[18] = GCL.auth.getUser().username; // own display name
                 if (p.length > 23) p[23] = GCL.auth.getUser().username; // isolatedUsername is a separate field
                 out = p.join(',');

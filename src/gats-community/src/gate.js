@@ -7,6 +7,11 @@
 //
 // Endpoints (query: limit, win in seconds):
 //   /check -> {n, locked}      read-only
+//   /try   -> reserves one in-flight slot (memory only); 429 when n + in-flight >= limit.
+//              Closes the check-then-fail race: N parallel guesses can no longer all pass a
+//              read-only /check before the first /fail lands. Must be followed by /fail (wrong
+//              password), /ok (success) or /done (abandoned). Unreleased slots expire after 30 s.
+//   /done  -> releases one /try slot without counting a failure
 //   /hit   -> counts every call; 429 once n >= limit        (register, rename, global cap)
 //   /fail  -> counts a failure; 429 once n >= limit          (bad passwords)
 //   /ok    -> clears the counter                             (successful login)
@@ -26,10 +31,23 @@ export function ipKey(ip) {
   return full.slice(0, 4).map((x) => x.replace(/^0+(?=.)/, '')).join(':') + '::/64';
 }
 
+const PENDING_TTL_MS = 30000;
 const GATE_HEADERS = { 'content-type': 'application/json' };
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: GATE_HEADERS });
 
 export class Gate extends DurableObject {
+  // In-flight reservations (timestamps). Memory only: a live request keeps the object resident, and a
+  // leaked slot is dropped by the TTL or by eviction, so nothing extra is ever written to storage.
+  prune() {
+    const cutoff = Date.now() - PENDING_TTL_MS;
+    this.pending = (this.pending || []).filter((t) => t > cutoff);
+  }
+
+  release() {
+    this.prune();
+    this.pending.shift();
+  }
+
   async load() {
     if (this.rec === undefined) this.rec = (await this.ctx.storage.get('r')) || null;
     if (this.rec && this.rec.reset <= Date.now()) this.rec = null;
@@ -46,11 +64,22 @@ export class Gate extends DurableObject {
     switch (u.pathname) {
       case '/check':
         return reply({ n, locked: n >= limit });
+      case '/try': {
+        this.prune();                      // no await between this check and the push: atomic
+        if (n + this.pending.length >= limit) return reply({ n, locked: true }, 429);
+        this.pending.push(Date.now());
+        return reply({ n, locked: false });
+      }
+      case '/done':
+        this.release();
+        return reply({ n, locked: n >= limit });
       case '/ok':
+        this.release();
         if (rec) { this.rec = null; await this.ctx.storage.deleteAll(); }
         return reply({ n: 0, locked: false });
       case '/hit':
       case '/fail':
+        if (u.pathname === '/fail') this.release(); // a /try reservation becomes a counted failure
         if (n >= limit) return reply({ n, locked: true }, 429); // locked: no further writes
         rec = rec || { n: 0, reset: Date.now() + win };
         rec.n++;

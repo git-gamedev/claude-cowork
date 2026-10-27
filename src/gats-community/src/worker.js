@@ -217,18 +217,20 @@ async function login(req, env) {
   // Failures only are counted: 20 per IP/64 and 10 per account per 15 min. No D1 writes, state survives eviction.
   // The per-account Gate is only touched for accounts that exist, so random names cannot spawn Gate DOs.
   const ipk = 'li:' + clientIp(req), lk = 'll:' + lc;
-  const gi = await gate(env, ipk, '/check', 20, 900);
+  // /try reserves a slot atomically in the Gate, so a parallel burst cannot all pass a read-only check
+  // before the first failure is counted (#31). Every path below must end in /fail, /ok or /done.
+  const gi = await gate(env, ipk, '/try', 20, 900);
   if (gi.locked) return json({ error: 'rate_limited' }, 429);
   const row = await env.DB.prepare('SELECT id,username,pw_hash,banned,ban_reason,token_version FROM users WHERE login=?1').bind(lc).first();
-  const gl = row ? await gate(env, lk, '/check', 10, 900) : { locked: false, n: 0 };
-  if (gl.locked) return json({ error: 'rate_limited' }, 429);
+  const gl = row ? await gate(env, lk, '/try', 10, 900) : { locked: false, n: 0 };
+  if (gl.locked) { await gate(env, ipk, '/done', 20, 900); return json({ error: 'rate_limited' }, 429); }
   // Always do one HMAC verify so unknown users cost the same as wrong passwords.
   const ok = row ? await pwVerify(env, row.id, b.key, row.pw_hash) : (await pwVerify(env, '0', b.key, DUMMY_HASH), false);
   if (!ok) {
     await Promise.all([gate(env, ipk, '/fail', 20, 900), row ? gate(env, lk, '/fail', 10, 900) : null]);
     return json({ error: 'invalid_credentials' }, 401);
   }
-  if (gl.n > 0) await gate(env, lk, '/ok', 10, 900);
+  await Promise.all([gate(env, ipk, '/done', 20, 900), gate(env, lk, '/ok', 10, 900)]); // release slots; success clears the account counter
   if (row.banned) return json({ error: 'banned', reason: row.ban_reason || null }, 403);
   // Soft cap: beyond 20 logins/hour per account the login still succeeds but is not logged (protects D1 write quota).
   if (!(await gate(env, 'ls:' + lc, '/hit', 20, 3600)).locked) await logEvent(env, row.id, 'login', null, await ipHash(env, req)).run();
