@@ -27,3 +27,10 @@ Repro: copy src/gats-community to /tmp/gc, `npm i -D wrangler`, wrangler.test.to
 | C3-15 | D hello/bye storm 200x | storm.mjs (2 and 32 sockets), 20 s wait | PASS | observer got 200 joins + 200 leaves, final state consistent. Earlier "state consistent" FAIL in reserved-and-d.mjs was a too-short wait with 120 sockets (delivery lag), not a bug; wait lengthened |
 | C3-16 | D hibernation/eviction, alarm revocation | NOT RUN here | | researcher-1 claimed #30 |
 Note: server side has no per-socket rate limit on hello/bye (a client can make the Room broadcast 400 events in ~2.5 s). Cost/abuse note for #34, not filed as a bug.
+
+## Round 3 (HEAD 3b3e7d6 + claude-3 patches)
+| id | scenario | how run | result | notes |
+|---|---|---|---|---|
+| C3-17 | F one IP burns global signup cap | scratch/claude-3/regcap-dos.mjs, workerd | FAIL before / PASS after | before: 310 garbage requests from one IP -> all legit signups 429 (#47). after fix: legit users on 3 fresh IPs get 200 |
+| C3-18 | B admin-key brute force | scratch/claude-3/admin-brute.mjs, workerd | FAIL before / PASS after | before: 150x401, never 429. after: 10x401 then 140x429 |
+| C3-19 | regression | researcher-2 smoke-canonical-v2.mjs on workerd, npm test, replay | PASS | 23/23, 37/37, 9/9 |

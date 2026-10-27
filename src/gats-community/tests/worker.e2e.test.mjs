@@ -191,3 +191,27 @@ test("reserved names: trailing look-alike digits (roo7, gat5, suppor7) are rejec
   assert.equal(a.status, 200);
   assert.equal((await call(env, "/rename", { token: a.json.token, body: { username: "roo7" } })).status, 409);
 });
+
+test("one IP cannot exhaust the global daily signup cap with rejected or invalid requests (#47)", async () => {
+  const env = makeEnv({ MAX_REG_PER_DAY: "3" });
+  const codes = [];
+  for (let i = 0; i < 20; i++) codes.push((await call(env, "/register", { body: { garbage: true }, ip: "66.6.6.6" })).status);
+  assert.equal(codes.filter((c) => c === 400).length, 5, "first 5 invalid requests reach validation");
+  assert.equal(codes.filter((c) => c === 429).length, 15, "the rest are stopped by the per-IP gate");
+  // the shared daily cap is still intact for everyone else
+  for (let i = 0; i < 3; i++) {
+    assert.equal((await call(env, "/register", { body: { username: "legit" + i, key: key() }, ip: "60.0.0." + i })).status, 200, "legit " + i);
+  }
+  assert.equal((await call(env, "/register", { body: { username: "legit9", key: key() }, ip: "60.0.0.9" })).status, 429, "cap of 3 still enforced for valid signups");
+});
+
+test("admin key guesses are throttled per IP; the right key still works from another IP (#28)", async () => {
+  const env = makeEnv();
+  const codes = [];
+  for (let i = 0; i < 14; i++) codes.push((await call(env, "/admin/ban", { body: { login: "nobody" }, ip: "77.7.7.7", headers: { "x-admin-key": "wrong" + i } })).status);
+  assert.equal(codes.filter((c) => c === 401).length, 10);
+  assert.equal(codes.filter((c) => c === 429).length, 4);
+  const ok = await call(env, "/admin/ban", { body: { login: "nobody" }, ip: "77.7.7.8", headers: { "x-admin-key": "adminkey" } });
+  assert.equal(ok.status, 404, "right key from another IP passes auth (user not found)");
+});
+

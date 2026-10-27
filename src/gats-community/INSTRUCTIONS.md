@@ -51,7 +51,7 @@ You need a Cloudflare account, Node.js/npm, and Tampermonkey. Open a terminal in
 
    Run each schema file only once against a given database. For a brand-new database, run both in order. For an existing database that already has `schema.sql` applied, apply only `schema_002.sql`. The migration adds `users.renamed_at`; do not edit an already-applied base schema instead of using the migration.
 
-5. Set Worker secrets interactively. Generate long random values using a trusted local method; do not put these values in `wrangler.toml`, source code, chat, issues or commits.
+5. Set Worker secrets interactively. Generate long random values locally (for example `openssl rand -base64 48` for each; the admin key is the only thing protecting `/admin/ban`, which also throttles wrong guesses per IP); do not put these values in `wrangler.toml`, source code, chat, issues or commits.
 
    ```bash
    npx wrangler secret put TOKEN_SECRET

@@ -144,14 +144,13 @@ async function gate(env, key, path, limit, winSec) {
 const clientIp = (req) => ipKey(req.headers.get('CF-Connecting-IP'));
 
 // register: 5 per IP/64 per hour, plus a global daily cap (D1 free plan is ~100k row writes/day).
-async function throttleRegister(env, req) {
+// The per-IP gate runs first and alone, and the global cap is only counted for requests that passed it and carry a
+// valid body: otherwise one IP could burn the shared daily cap with rejected or garbage requests (#47).
+const throttleRegisterIp = async (env, req) => !(await gate(env, 'reg:' + clientIp(req), '/hit', 5, 3600)).locked;
+async function throttleRegisterDay(env) {
   const day = new Date().toISOString().slice(0, 10);
   const cap = Math.max(1, Number(env.MAX_REG_PER_DAY) || 300);
-  const [ip, all] = await Promise.all([
-    gate(env, 'reg:' + clientIp(req), '/hit', 5, 3600),
-    gate(env, 'regday:' + day, '/hit', cap, 86400),
-  ]);
-  return !(ip.locked || all.locked);
+  return !(await gate(env, 'regday:' + day, '/hit', cap, 86400)).locked;
 }
 const throttleRename = async (env, req) => !(await gate(env, 'ren:' + clientIp(req), '/hit', 10, 3600)).locked;
 
@@ -274,12 +273,13 @@ const parseDev = async (env, uid, b) => (DEV_RE.test(String((b && b.dev) || ''))
 async function register(req, env) {
   const on = emailOn(env);
   if (on && (await ipBanned(env, req))) return json({ error: 'ip_banned' }, 429);
-  if (!(await throttleRegister(env, req))) return json({ error: 'rate_limited' }, 429);
+  if (!(await throttleRegisterIp(env, req))) return json({ error: 'rate_limited' }, 429);
   const b = await readBody(req);
   if (!b || !USERNAME_RE.test(String(b.username || '')) || !KEY_RE.test(String(b.key || ''))) return json({ error: 'invalid_input' }, 400);
   const email = on ? normEmail(b.email) : null;
   if (on && !email) return json({ error: 'invalid_email' }, 400);
   if (isReservedUsername(b.username)) return json({ error: 'name_taken' }, 409);
+  if (!(await throttleRegisterDay(env))) return json({ error: 'rate_limited' }, 429);
   const uid = b64u.enc(crypto.getRandomValues(new Uint8Array(12)));
   const lc = b.username.toLowerCase();
   const hash = await pwHash(env, uid, b.key);
@@ -477,7 +477,15 @@ async function presence(req, env) {
 }
 
 async function adminBan(req, env) {
-  if (!env.ADMIN_KEY || !(await safeEqual(env, req.headers.get('X-Admin-Key') || '', env.ADMIN_KEY))) return json({ error: 'unauthorized' }, 401);
+  // Failed admin-key guesses are throttled per IP/64 (10 per 15 min); /try reserves a slot so a parallel burst cannot all pass.
+  const adk = 'adm:' + clientIp(req);
+  if (!env.ADMIN_KEY) return json({ error: 'unauthorized' }, 401);
+  if ((await gate(env, adk, '/try', 10, 900)).locked) return json({ error: 'rate_limited' }, 429);
+  if (!(await safeEqual(env, req.headers.get('X-Admin-Key') || '', env.ADMIN_KEY))) {
+    await gate(env, adk, '/fail', 10, 900);
+    return json({ error: 'unauthorized' }, 401);
+  }
+  await gate(env, adk, '/ok', 10, 900);
   const b = await readBody(req);
   const login = String((b && b.login) || '').toLowerCase();
   if (!b || !USERNAME_RE.test(login)) return json({ error: 'invalid_input' }, 400);
