@@ -117,3 +117,19 @@ test("a valid account looping /login stops writing audit rows after 20/hour but 
   for (let i = 0; i < 25; i++) assert.equal((await call(env, "/login", { body: { login: "looper", key: key("a") } })).status, 200);
   assert.equal(logins(), 20);
 });
+
+test("reserved names: separator and digit look-alike variants are rejected on register and rename (#32)", async () => {
+  const env = makeEnv();
+  const variants = ["admin.", "ad-min", "a_d.m-i_n", "admin_", "mod.erator", "adm1n", "m0derator", "gatsio", "gats_io", "R00T"];
+  let n = 0;
+  for (const v of variants) {
+    const r = await call(env, "/register", { body: { username: v, key: key() }, ip: "9.9." + (n++) + ".1" });
+    assert.equal(r.status, 409, v);
+  }
+  const a = await call(env, "/register", { body: { username: "zed", key: key("z") }, ip: "8.8.8.8" });
+  assert.equal(a.status, 200);
+  for (const v of ["admin.", "ad-min", "sys7em"]) {
+    assert.equal((await call(env, "/rename", { token: a.json.token, body: { username: v } })).status, 409, v);
+  }
+  assert.equal((await call(env, "/register", { body: { username: "adminton", key: key("y") }, ip: "8.8.4.4" })).status, 200);
+});

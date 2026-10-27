@@ -128,7 +128,15 @@ const GCL = {
         banned: 'This account is banned.',
         revoked: 'Session expired. Log in again.',
     };
-    const errText = (r) => ERRORS[r.data && r.data.error] || 'Something went wrong. Try again.';
+    const errText = (r) => {
+        const e = r.data && r.data.error;
+        if (e === 'rename_cooldown') { // worker /rename 429 {retryAfter: seconds} (#41)
+            const sec = Number(r.data.retryAfter) || 0;
+            const wait = sec >= 3600 ? Math.ceil(sec / 3600) + ' h' : Math.max(1, Math.ceil(sec / 60)) + ' min';
+            return 'You can rename once per day. Try again in about ' + wait + '.';
+        }
+        return ERRORS[e] || 'Something went wrong. Try again.';
+    };
 
     // ---- UI ----
     const CSS = `
