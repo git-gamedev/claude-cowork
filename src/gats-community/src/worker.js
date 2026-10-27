@@ -156,9 +156,15 @@ const throttleRename = async (env, req) => !(await gate(env, 'ren:' + clientIp(r
 const isUnique = (e) => /UNIQUE/i.test(String(e && e.message) + String(e && e.cause));
 // Canonical form: lowercase, drop . _ - separators and trailing digits, fold look-alikes (0->o, 1/l->i, 3->e, 4->a, 5->s, 7->t).
 const FOLD = { 0: 'o', 1: 'i', l: 'i', 3: 'e', 4: 'a', 5: 's', 7: 't' };
-const canonName = (u) => String(u).toLowerCase().replace(/[._-]/g, '').replace(/\d+$/, '').replace(/[013457l]/g, (c) => FOLD[c]);
-const RESERVED_CANON = new Set([...RESERVED_NAMES].map(canonName));
-const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase()) || RESERVED_CANON.has(canonName(username));
+const foldName = (s) => s.replace(/[013457l]/g, (c) => FOLD[c]);
+// Two canonical forms, because a trailing digit is either a counter (admin2 -> admin) or a look-alike letter (roo7 -> root):
+// strip trailing digits then fold, and fold then strip trailing digits. A name is reserved if either form is reserved.
+const canonForms = (u) => {
+  const s = String(u).toLowerCase().replace(/[._-]/g, '');
+  return [foldName(s.replace(/\d+$/, '')), foldName(s).replace(/\d+$/, '')];
+};
+const RESERVED_CANON = new Set([...RESERVED_NAMES].flatMap(canonForms));
+const isReservedUsername = (username) => RESERVED_NAMES.has(String(username).toLowerCase()) || canonForms(username).some((c) => RESERVED_CANON.has(c));
 // Compiled once per distinct config value, not per request.
 let roomRules = null;
 function isAllowedRoom(room, env) {

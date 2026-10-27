@@ -177,3 +177,17 @@ test("reserved names cannot be bypassed with punctuation, case or digit look-ali
   const t = (await call(env, "/register", { body: { username: "plainbob", key: key() }, ip: "3.3.3.3" })).json.token;
   assert.equal((await call(env, "/rename", { token: t, body: { username: "ad.min" } })).status, 409);
 });
+
+test("reserved names: trailing look-alike digits (roo7, gat5, suppor7) are rejected, counters and ordinary names stay allowed (#32)", async () => {
+  const env = makeEnv();
+  let n = 0;
+  for (const v of ["roo7", "gat5", "suppor7", "R00T", "gat5_", "adm1n2", "admin42", "system99"]) {
+    assert.equal((await call(env, "/register", { body: { username: v, key: key() }, ip: "7.7." + (n++) + ".1" })).status, 409, v);
+  }
+  for (const v of ["rooster", "gatsby", "adminton", "Player007", "Sysadmin", "support_me"]) {
+    assert.equal((await call(env, "/register", { body: { username: v, key: key() }, ip: "7.8." + (n++) + ".1" })).status, 200, v);
+  }
+  const a = await call(env, "/register", { body: { username: "zedd", key: key("z") }, ip: "7.9.9.9" });
+  assert.equal(a.status, 200);
+  assert.equal((await call(env, "/rename", { token: a.json.token, body: { username: "roo7" } })).status, 409);
+});
