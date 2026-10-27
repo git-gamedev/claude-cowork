@@ -26,3 +26,34 @@ NOT run: workerd, a real browser/Tampermonkey, the live game. Every finding belo
 6. Needs a real browser: unsafeWindow.WebSocket replaced by a sandbox function (Firefox/Xray behaviour unknown); assumption that
    the game uses binaryType arraybuffer; whether the injected re-init 'd' frame triggers spawn effects in the game.
 7. Info: 'login' event fires on every refresh/rename, so hello is re-sent; harmless.
+
+---
+# Fixes and verification (claude-2, took an implementer slice on user instruction), main @ 7435a16
+
+Merged with concurrent work by other instances: #32 reserved-name normalisation (e9fd6f6) and #41 rename_cooldown message (b4e1167) were
+landed by others while I worked; I kept their versions and added only the parts that were missing.
+
+## What changed (commit 7435a16)
+- #31 Gate TOCTOU: new `/try` endpoint reserves an in-flight slot atomically (memory only, 30 s TTL); `/fail`, `/ok`, `/done` release it.
+  worker.js login() now calls `/try` on the IP and account Gates instead of the read-only `/check`, then `/fail` (wrong password) or
+  `/done` + `/ok` (success). No extra storage writes; failures are still the only thing persisted.
+- Userscript (from my #29 review): stale presence socket can no longer stop the new socket's heartbeat or bump the retry counter;
+  'a'-frame own-name rewrite now requires p.length > 18.
+- Tests: +2 Gate unit tests, +3 parallel-burst e2e tests, +1 reserved-name e2e test. Suite is now 34 tests.
+
+## Evidence
+- Node: `npm test` 34/34 (28/34 before the fix: the 5 new tests failed, reproducing the overshoot and the bypass); replay 9/9.
+- REAL workerd (wrangler 4.x `dev --local`, local D1, real DOs), copy of src/gats-community in /tmp at 7435a16, scripts from scratch/claude-3:
+  - burst.mjs: 200 parallel wrong guesses, distinct IPs, one account -> {401:10, 429:190} (before: 20 passed in claude-3's run).
+  - burst.mjs / burst-ip.mjs: one IP, parallel unknown users, N=30..200, 6 trials -> exactly 20x401, rest 429 every time (before: 30/30 to 200/200 passed).
+  - fifth-1 smoke-canonical-gats-community.mjs: 22/22. Two local adjustments to the script, not committed: ADMIN_KEY set to the script's
+    value, and the "gate" loop raised from 12 to 25 tries because the IP limit is 20 (the earlier 21/22 was that stale expectation).
+  - Reserved names on workerd: admin. / ad-min / a_d.m-i_n / adm1n / m0derator / gats_io / Gatsio / sy5tem / off1cial / r00t / admin2 -> 409;
+    adam / modest / rooty -> 200. Rename twice -> 200 then 429 {error:rename_cooldown, retryAfter:86400}.
+
+## Trade-offs and limits
+- A successful login now costs 4 Gate DO requests (try x2, done, ok) instead of 2-3. Logins are rare (7-day token), so the 100k/day DO request cap is not affected in practice.
+- Parallel in-flight attempts count against the limit: more than 10 simultaneous logins for one account, or 20 from one IP, get 429 even if they would succeed.
+- Lockout griefing (10 wrong guesses lock an account for 15 min) is unchanged and remains an accepted limit.
+- Still NOT tested: real Cloudflare deploy, browser/Tampermonkey (the userscript edits are syntax-checked and replay-tested only), live game.
+- Reserved-name check is exact-match after normalisation, so impersonation like "admin_official" or "TheAdmin" is still possible.
