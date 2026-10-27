@@ -1,0 +1,25 @@
+PASS register
+PASS dup register 409
+PASS reserved name
+PASS login
+PASS wrong pw
+PASS refresh
+PASS rename
+PASS rename cooldown (token still same tv)
+PASS alice ws opens
+PASS alice roster
+PASS carol sees join
+PASS pid steal blocked
+PASS lookup
+PASS live rename pushed
+PASS bad token rejected (ws fails)
+PASS bad room rejected
+PASS older alice socket closed/closing
+PASS admin ban
+PASS banned socket kicked
+PASS banned login 403
+PASS admin wrong key
+FAIL gate rate limits after 10 hits 401
+11 SUCCESSFUL logins from one IP -> 200,200,200,200,200,200,200,200,200,200,200
+
+1 FAILED
